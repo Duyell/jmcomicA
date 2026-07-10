@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.chaquo.python.Python
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,12 +15,19 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 
+data class PdfInfo(
+    val name: String,
+    val path: String
+)
+
 data class DownloadUiState(
     val albumId: String = "",
     val status: DownloadStatus = DownloadStatus.Idle,
     val pdfPath: String? = null,
     val errorMessage: String? = null,
-    val debugStep: String = ""
+    val lastPdf: PdfInfo? = null,
+    val progressMessage: String = "",
+    val progressFraction: Float? = null  // null = indeterminate
 )
 
 sealed class DownloadStatus {
@@ -37,9 +45,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<DownloadUiState> = _uiState.asStateFlow()
 
     init {
-        // Clean up old downloads and PDFs from previous sessions
         viewModelScope.launch(Dispatchers.IO) {
-            cleanupCache()
+            scanExistingPdf()
+        }
+    }
+
+    private fun scanExistingPdf() {
+        val dir = File(outputDir)
+        if (!dir.isDirectory) return
+        val pdfs = dir.listFiles()?.filter {
+            it.extension.equals("pdf", ignoreCase = true) && it.isFile
+        }?.sortedByDescending { it.lastModified() }
+        val latest = pdfs?.firstOrNull()
+        if (latest != null) {
+            _uiState.value = _uiState.value.copy(
+                lastPdf = PdfInfo(name = latest.name, path = latest.absolutePath)
+            )
         }
     }
 
@@ -51,19 +72,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val id = _uiState.value.albumId.trim()
         if (id.isEmpty()) {
             _uiState.value = _uiState.value.copy(
-                status = DownloadStatus.Error("please enter album ID"),
-                errorMessage = "please enter album ID"
+                status = DownloadStatus.Error("请输入车号"),
+                errorMessage = "请输入车号"
             )
             return
         }
 
         _uiState.value = _uiState.value.copy(
             status = DownloadStatus.Downloading,
-            debugStep = "",
+            progressMessage = "准备中...",
+            progressFraction = null,
             errorMessage = null
         )
 
-        // Clean previous PDF before starting new download
         viewModelScope.launch(Dispatchers.IO) {
             cleanupOldPdfs()
             downloadInBackground(id)
@@ -71,63 +92,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun downloadInBackground(albumId: String) {
-        val steps = StringBuilder()
+        // Launch progress polling coroutine
+        val pollJob = viewModelScope.launch(Dispatchers.IO) {
+            pollProgress()
+        }
+
         try {
             val outDir = outputDir
-            step(steps, "1.outputDir", outDir)
-
-            step(steps, "2.getInstance", "OK")
             val py = withContext(Dispatchers.IO) { Python.getInstance() }
-
-            step(steps, "3.getModule", "OK")
             val module = withContext(Dispatchers.IO) { py.getModule("jm_bridge") }
-
-            step(steps, "4.download.start", "running...")
             val jsonStr = withContext(Dispatchers.IO) {
                 module.callAttr("get_pdf_path", albumId, outDir).toString()
             }
-            Log.w(TAG, "json result: " + jsonStr.substring(0, kotlin.math.min(jsonStr.length, 500)))
+            Log.d(TAG, "json result: " + jsonStr.take(500))
 
             val json = JSONObject(jsonStr)
-            step(steps, "5.parse", "OK")
-
             val success = json.optBoolean("success", false)
             val pdfPath = json.optString("pdf_path", "")
             val error = json.optString("error", "")
             val tb = json.optString("traceback", "")
 
             if (success) {
-                step(steps, "DONE", pdfPath)
                 _uiState.value = _uiState.value.copy(
-                    status = DownloadStatus.Success, pdfPath = pdfPath,
-                    debugStep = steps.toString(), errorMessage = null
+                    status = DownloadStatus.Success,
+                    pdfPath = pdfPath,
+                    progressFraction = null,
+                    progressMessage = "",
+                    errorMessage = null,
+                    lastPdf = PdfInfo(name = File(pdfPath).name, path = pdfPath)
                 )
             } else {
-                val errMsg = when {
-                    tb.isNotBlank() -> tb
-                    error.isNotBlank() -> error
-                    else -> "download failed, no details"
-                }.let { it.substring(0, kotlin.math.min(it.length, 500)) }
-                step(steps, "FAIL", errMsg)
+                val errMsg = (if (tb.isNotBlank()) tb else error)
+                    .take(500).ifBlank { "下载失败，无详细信息" }
                 _uiState.value = _uiState.value.copy(
                     status = DownloadStatus.Error(errMsg),
-                    errorMessage = errMsg, debugStep = steps.toString()
+                    errorMessage = errMsg,
+                    progressFraction = null,
+                    progressMessage = ""
                 )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Python download failed", e)
-            val errMsg = e.javaClass.simpleName + ": " + (e.message ?: "(null)")
-            step(steps, "CRASH", errMsg)
+            val errMsg = "${e.javaClass.simpleName}: ${e.message ?: "(null)"}"
             _uiState.value = _uiState.value.copy(
                 status = DownloadStatus.Error(errMsg),
-                errorMessage = errMsg, debugStep = steps.toString()
+                errorMessage = errMsg,
+                progressFraction = null,
+                progressMessage = ""
             )
+        } finally {
+            pollJob.cancel()
+            // Delete stale progress file
+            try { File(outputDir, "progress.json").delete() } catch (_: Exception) {}
         }
     }
 
-    private fun step(sb: StringBuilder, label: String, result: String) {
-        sb.append(label).append(" -> ").append(result).append("\n")
-        _uiState.value = _uiState.value.copy(debugStep = sb.toString())
+    private suspend fun pollProgress() {
+        while (true) {
+            delay(400)
+            try {
+                val file = File(outputDir, "progress.json")
+                if (!file.exists()) continue
+                val content = file.readText()
+                val json = JSONObject(content)
+                val message = json.optString("message", "")
+                val current = json.optInt("current", 0)
+                val total = json.optInt("total", 0)
+                val fraction = if (total > 0) current.toFloat() / total else null
+                _uiState.value = _uiState.value.copy(
+                    progressMessage = message,
+                    progressFraction = fraction
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     private val outputDir: String
@@ -135,10 +172,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (!it.exists()) it.mkdirs()
         }.absolutePath
 
-    fun reset() {
-        _uiState.value = DownloadUiState()
-        viewModelScope.launch(Dispatchers.IO) {
-            cleanupOldPdfs()
+    fun deleteLastPdf() {
+        val info = _uiState.value.lastPdf ?: return
+        try { File(info.path).delete() } catch (_: Exception) {}
+        _uiState.value = _uiState.value.copy(lastPdf = null)
+        // Also clear success state
+        if (_uiState.value.status is DownloadStatus.Success) {
+            _uiState.value = _uiState.value.copy(
+                status = DownloadStatus.Idle,
+                pdfPath = null
+            )
         }
     }
 
@@ -148,21 +191,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (dir.isDirectory) {
                 dir.listFiles()?.filter { it.extension.equals("pdf", ignoreCase = true) }
                     ?.forEach { it.delete() }
-                // Also clean downloads dir
                 val downloads = File(dir, "downloads")
-                if (downloads.isDirectory) {
-                    downloads.deleteRecursively()
-                }
+                if (downloads.isDirectory) downloads.deleteRecursively()
             }
-        } catch (_: Exception) { }
-    }
-
-    private fun cleanupCache() {
-        try {
-            val dir = File(outputDir)
-            if (dir.isDirectory) {
-                dir.listFiles()?.forEach { it.deleteRecursively() }
-            }
-        } catch (_: Exception) { }
+        } catch (_: Exception) {}
     }
 }

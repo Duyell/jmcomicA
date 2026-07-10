@@ -8,7 +8,9 @@
     <application
         android:name=".JMComicApp"
         android:allowBackup="true"
-        android:label="JMComic PDF"
+        android:label="JMComicPdf"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.JMComicPDF"
         android:usesCleartextTraffic="true"

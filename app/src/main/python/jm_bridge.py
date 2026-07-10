@@ -68,6 +68,21 @@ def _open_image_via_android(fp) -> "PIL.Image":
     return Image.open(io.BytesIO(jpeg_bytes))
 
 
+def _write_progress(output_dir, stage, current=0, total=0, message=""):
+    """Write a progress.json file for the Kotlin side to poll."""
+    try:
+        path = os.path.join(output_dir, "progress.json")
+        with open(path, 'w') as f:
+            json.dump({
+                "stage": stage,
+                "current": current,
+                "total": total,
+                "message": message,
+            }, f)
+    except Exception:
+        pass
+
+
 def download_album_as_pdf(album_id: str, output_dir: str) -> str:
     """
     Download a JM comic album and convert all images to a single PDF.
@@ -78,16 +93,13 @@ def download_album_as_pdf(album_id: str, output_dir: str) -> str:
     import jmcomic
     from jmcomic.jm_client_interface import JmImageResp
 
-    # Capture scramble metadata per image filepath
-    _image_meta = {}  # filepath -> num
+    _image_meta = {}
 
     _orig_transfer_to = JmImageResp.transfer_to
 
     def _patched_transfer_to(self, path, scramble_id, decode_image=True, img_url=None):
-        # Save raw scrambled WebP bytes
         with open(path, 'wb') as f:
             f.write(self.content)
-        # Capture scramble params for post-processing
         if scramble_id is not None and img_url is not None:
             from jmcomic.jm_toolkit import JmImageTool
             _image_meta[path] = JmImageTool.get_num_by_url(scramble_id, img_url)
@@ -114,11 +126,13 @@ plugins:
     download_base = os.path.join(output_dir, "downloads")
 
     try:
+        _write_progress(output_dir, "connecting", 0, 0, "获取漫画信息...")
+
         album, downloader = jmcomic.download_album(album_id, option)
         downloader.raise_if_has_exception()
 
-        # Post-process: unscramble via Android Canvas API (no PIL needed)
-        _unscramble_via_android(_image_meta)
+        _write_progress(output_dir, "unscramble", 0, len(_image_meta), "解扰图片...")
+        _unscramble_via_android(_image_meta, output_dir)
 
         all_image_paths = _collect_images(download_base)
 
@@ -131,11 +145,12 @@ plugins:
         pdf_filename = "[JM{}] {}.pdf".format(album_id, safe_title)
         pdf_path = os.path.join(output_dir, pdf_filename)
 
-        _images_to_pdf(all_image_paths, pdf_path)
+        _images_to_pdf(all_image_paths, pdf_path, output_dir)
 
         if not os.path.exists(pdf_path):
             raise FileNotFoundError("PDF not generated: " + pdf_path)
 
+        _write_progress(output_dir, "done", 0, 0, "")
         return pdf_path
 
     finally:
@@ -143,25 +158,31 @@ plugins:
             JmImageResp.transfer_to = _orig_transfer_to
         except Exception:
             pass
+        # Delete progress file
+        try:
+            os.remove(os.path.join(output_dir, "progress.json"))
+        except Exception:
+            pass
         _cleanup_dir(download_base)
 
 
-def _unscramble_via_android(image_meta: dict):
+def _unscramble_via_android(image_meta: dict, output_dir: str):
     """
     Unscramble WebP images using Android's Bitmap + Canvas API.
     Reorders horizontal strips in-place, saves as JPEG.
     """
-    import math
     from android.graphics import (
-        BitmapFactory, Bitmap, Canvas, Paint, Rect, RectF,
+        BitmapFactory, Bitmap, Canvas, Paint, Rect,
     )
-    from java.io import FileOutputStream
 
-    for filepath, num in image_meta.items():
+    total = len(image_meta)
+    for idx, (filepath, num) in enumerate(image_meta.items()):
         if not os.path.exists(filepath):
             continue
 
-        # Decode scrambled WebP via Android
+        _write_progress(output_dir, "unscramble", idx + 1, total,
+                        "解扰 {}/{}".format(idx + 1, total))
+
         bitmap = BitmapFactory.decodeFile(filepath)
         if bitmap is None:
             print("unscramble_fail: decode failed for {}".format(filepath))
@@ -171,11 +192,9 @@ def _unscramble_via_android(image_meta: dict):
         h = bitmap.getHeight()
 
         if num <= 1:
-            # Not scrambled or simple reverse — save as JPEG directly
             _save_bitmap_as_jpeg(bitmap, filepath)
             continue
 
-        # Create output bitmap and canvas
         out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         canvas = Canvas(out)
         paint = Paint()
@@ -195,8 +214,6 @@ def _unscramble_via_android(image_meta: dict):
             canvas.drawBitmap(bitmap, src_rect, dst_rect, paint)
 
         bitmap.recycle()
-
-        # Save as JPEG, remove original WebP
         _save_bitmap_as_jpeg(out, filepath)
         out.recycle()
         print("unscramble: {} num={} ({}x{})".format(
@@ -260,7 +277,7 @@ def _decode_image_via_android(filepath: str):
     return jpeg_path
 
 
-def _images_to_pdf(image_paths: list, output_pdf: str):
+def _images_to_pdf(image_paths: list, output_pdf: str, output_dir: str):
     """
     Convert a list of image paths into a single PDF.
     Uses Pillow for JPEG/PNG, and Android BitmapFactory for WebP.
@@ -268,18 +285,18 @@ def _images_to_pdf(image_paths: list, output_pdf: str):
     from PIL import Image, features
 
     webp_supported = features.check("webp")
-    if not webp_supported:
-        print("WARNING: Pillow WebP support unavailable, using Android decoder fallback.")
-
+    total = len(image_paths)
     image_objects = []
     skipped = []
-    android_temp_files = []  # track temp JPEGs for cleanup
+    android_temp_files = []
 
-    for path in image_paths:
-        open_path = path  # path Pillow will actually read
+    for idx, path in enumerate(image_paths):
+        _write_progress(output_dir, "pdf", idx + 1, total,
+                        "合成PDF {}/{}".format(idx + 1, total))
+
         try:
-            img = Image.open(open_path)
-            img.load()  # force decode to catch errors early
+            img = Image.open(path)
+            img.load()
         except Exception as e:
             # If Pillow can't read it, try Android BitmapFactory
             try:
