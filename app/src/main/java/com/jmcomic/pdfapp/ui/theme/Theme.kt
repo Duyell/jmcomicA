@@ -4,27 +4,28 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val DarkColorScheme = darkColorScheme(
-    primary = AccentPink,
+private val LightColorScheme = lightColorScheme(
+    primary = AccentBlue,
     secondary = AccentCyan,
-    tertiary = Purple80,
+    tertiary = Purple40,
     background = SurfaceDark,
     surface = SurfaceContainer,
-    onPrimary = TextPrimary,
+    onPrimary = Color.White,
     onSecondary = SurfaceDark,
-    onTertiary = SurfaceDark,
+    onTertiary = Color.White,
     onBackground = TextPrimary,
     onSurface = TextPrimary,
     error = ErrorRed,
-    onError = TextPrimary
+    onError = Color.White
 )
 
 private fun Context.findActivity(): Activity? {
@@ -38,7 +39,7 @@ private fun Context.findActivity(): Activity? {
 
 @Composable
 fun JMComicPDFTheme(content: @Composable () -> Unit) {
-    val colorScheme = DarkColorScheme
+    val colorScheme = LightColorScheme
     val view = LocalView.current
     val context = LocalContext.current
 
@@ -49,8 +50,8 @@ fun JMComicPDFTheme(content: @Composable () -> Unit) {
             window.statusBarColor = colorScheme.background.toArgb()
             window.navigationBarColor = colorScheme.background.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = false
-                isAppearanceLightNavigationBars = false
+                isAppearanceLightStatusBars = true
+                isAppearanceLightNavigationBars = true
             }
         }
     }
