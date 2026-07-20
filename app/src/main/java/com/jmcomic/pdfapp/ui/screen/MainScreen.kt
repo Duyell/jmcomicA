@@ -76,21 +76,14 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
 
         // ── Header ──
         Text(
-            "JMComic PDF",
+            "PDF下载器",
             style = MaterialTheme.typography.headlineLarge,
             color = TextPrimary,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.sp
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "输入车号 · 一键下载 · 自动合成",
-            style = MaterialTheme.typography.bodySmall,
-            color = TextSecondary.copy(alpha = 0.7f),
-            letterSpacing = 2.sp
-        )
 
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(32.dp))
 
         // ── Input Card ──
         Column(
@@ -103,7 +96,7 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
             OutlinedTextField(
                 value = uiState.albumId,
                 onValueChange = viewModel::onAlbumIdChanged,
-                label = { Text("漫画 ID / 车号") },
+                label = { Text("漫画ID") },
                 placeholder = { Text("例如: 350234") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
