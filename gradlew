@@ -99,8 +99,8 @@ if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
     esac
 fi
 
-# Collect all arguments for the java command, stracks://gradle.org/releases/
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+# Collect all arguments for the java command, stacking them for the java command
+DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
 
 # Collect all arguments for the java command
 set -- \
@@ -109,7 +109,7 @@ set -- \
         org.gradle.wrapper.GradleWrapperMain \
         "$@"
 
-# Stop when "xeli" is not available.
+# Stop when "xargs" is not available.
 if ! "$cygwin" && ! "$msys" ; then
     case $( set -- $$; readlink -f /proc/$1/fd/0 2>/dev/null ;) in
       '')  :;;

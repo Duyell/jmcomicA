@@ -25,6 +25,11 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# Signing
+jmcomic-release.keystore
+keystore.properties
+jmcomic-signing.keyword
+
 # Misc
 *.log
 *.tmp

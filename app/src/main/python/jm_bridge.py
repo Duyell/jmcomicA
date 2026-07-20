@@ -12,21 +12,55 @@ import io
 import json
 
 
-# ---- Block curl_cffi BEFORE any jmcomic import ----
-# curl_cffi contains Windows .pyd native code that crashes Android ARM64.
-# This meta_path hook raises ImportError on any curl_cffi import attempt,
-# so jmcomic's existing fallback to plain requests activates cleanly.
-from importlib.abc import MetaPathFinder
+# ---- Mock curl_cffi & async modules BEFORE any jmcomic import ----
+# curl_cffi has native .pyd/.so incompatible with Android.
+# jmcomic 2.7.2 added async modules that import curl_cffi at module level.
+# We mock them here so the entire import chain succeeds cleanly.
+import types as _types
+import importlib.abc as _abc
+import importlib.machinery as _mach
 
-class _CurlCffiBlocker(MetaPathFinder):
+# 1) Pre-seed sys.modules with fake curl_cffi packages
+_curl_cffi = _types.ModuleType("curl_cffi")
+_curl_cffi.__path__ = []
+_curl_cffi_requests = _types.ModuleType("curl_cffi.requests")
+class _DummyAsyncSession: pass
+_curl_cffi_requests.AsyncSession = _DummyAsyncSession
+_curl_cffi.requests = _curl_cffi_requests
+sys.modules["curl_cffi"] = _curl_cffi
+sys.modules["curl_cffi.requests"] = _curl_cffi_requests
+
+# 2) MetaPathFinder: mock jmcomic's async sub-modules so __init__.py's
+#    `from .jm_async_client import AsyncJmApiClient` etc. don't crash.
+_MOCKED_JM_MODULES = {
+    "jmcomic.jm_async_client",
+    "jmcomic.jm_async_downloader",
+}
+
+class _JmAsyncModuleLoader(_abc.Loader):
+    """Loader that creates an empty mock module."""
+    def create_module(self, spec):
+        mod = _types.ModuleType(spec.name)
+        # Provide the class that __init__.py expects
+        if spec.name == "jmcomic.jm_async_client":
+            class _MockAsyncJmApiClient: pass
+            mod.AsyncJmApiClient = _MockAsyncJmApiClient
+        if spec.name == "jmcomic.jm_async_downloader":
+            class _MockJmAsyncDownloader: pass
+            mod.JmAsyncDownloader = _MockJmAsyncDownloader
+        return mod
+
+    def exec_module(self, module):
+        pass
+
+class _JmAsyncFinder(_abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == "curl_cffi" or fullname.startswith("curl_cffi."):
-            raise ImportError(
-                "curl_cffi blocked: contains incompatible native code for Android"
-            )
+        if fullname in _MOCKED_JM_MODULES:
+            spec = _mach.ModuleSpec(fullname, _JmAsyncModuleLoader(), is_package=False)
+            return spec
         return None
 
-sys.meta_path.insert(0, _CurlCffiBlocker())
+sys.meta_path.insert(0, _JmAsyncFinder())
 # --------------------------------------------------------------
 
 
@@ -83,6 +117,25 @@ def _write_progress(output_dir, stage, current=0, total=0, message=""):
         pass
 
 
+def _detect_emulator_proxy():
+    """
+    On Android emulators, the host machine's proxy at 10.0.2.2 is used to
+    reach blocked sites. On real devices, users have system VPN apps so
+    no explicit proxy is needed. Returns proxy URL or empty string.
+    """
+    import socket
+    for port in (10808, 7890, 10809):
+        try:
+            s = socket.socket()
+            s.settimeout(0.5)
+            s.connect(('10.0.2.2', port))
+            s.close()
+            return 'http://10.0.2.2:{}'.format(port)
+        except Exception:
+            pass
+    return ''
+
+
 def download_album_as_pdf(album_id: str, output_dir: str) -> str:
     """
     Download a JM comic album and convert all images to a single PDF.
@@ -90,8 +143,25 @@ def download_album_as_pdf(album_id: str, output_dir: str) -> str:
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    import jmcomic
-    from jmcomic.jm_client_interface import JmImageResp
+    try:
+        import jmcomic
+        from jmcomic.jm_client_interface import JmImageResp
+    except Exception as _import_err:
+        # Dump FULL details so we can see the real error in logcat
+        import traceback as _tb
+        _detail = _tb.format_exc()
+        _crash_log = os.path.join(output_dir, "crash.log")
+        try:
+            with open(_crash_log, 'w', encoding='utf-8') as _f:
+                _f.write("=== JMCOMIC IMPORT FAILED ===\n")
+                _f.write(_detail)
+                _f.write("\n=== sys.modules[curl_cffi] ===\n")
+                _f.write(str(sys.modules.get("curl_cffi", "NOT FOUND")))
+        except Exception:
+            pass
+        # Also print to stderr for logcat visibility
+        print("CRITICAL: import jmcomic failed:\n" + _detail, file=sys.stderr)
+        raise
 
     _image_meta = {}
 
@@ -106,11 +176,21 @@ def download_album_as_pdf(album_id: str, output_dir: str) -> str:
 
     JmImageResp.transfer_to = _patched_transfer_to
 
+    proxy = _detect_emulator_proxy()
+    proxy_yaml = ''
+    if proxy:
+        proxy_yaml = """
+      proxies:
+        http: {proxy}
+        https: {proxy}""".format(proxy=proxy)
+
     option_text = """
 client:
   impl: api
   postman:
     type: requests
+    meta_data:
+      timeout: 30{proxy_yaml}
 
 dir_rule:
   rule: Bd_Aid
@@ -118,7 +198,8 @@ dir_rule:
 
 plugins:
   after_album: []
-""".format(output_dir=output_dir.replace('\\', '/'))
+""".format(output_dir=output_dir.replace('\\', '/'),
+           proxy_yaml=proxy_yaml)
 
     option = jmcomic.create_option_by_str(option_text)
     album_id = str(album_id).strip()
@@ -384,17 +465,35 @@ def get_pdf_path(album_id: str, output_dir: str) -> str:
     Returns a JSON string with the result.
 
     On success: {"success": true, "pdf_path": "/path/to/file.pdf"}
-    On failure: {"success": false, "error": "...", "traceback": "..."}
+    On failure: {"success": false, "error": "ExceptionType: message", "traceback": "..."}
     """
     try:
         pdf_path = download_album_as_pdf(album_id, output_dir)
         return json.dumps({"success": True, "pdf_path": pdf_path})
     except Exception as e:
+        # Build a CLEAR error: type + message FIRST, then full traceback
+        err_type = type(e).__name__
+        err_msg = str(e) if str(e) else "(no message)"
+
+        # Walk the full cause chain
+        cause = e.__cause__
+        chain = ""
+        while cause is not None:
+            chain += "\nCaused by: {}: {}".format(type(cause).__name__, cause)
+            cause = cause.__cause__
+
         buf = io.StringIO()
         traceback.print_exc(file=buf)
-        err_msg = "{}: {}".format(type(e).__name__, str(e))
+        full_tb = buf.getvalue()
+
+        # Format: [ExceptionType] message\n\nTraceback...
+        formatted = "[{}] {}{}\n\n{}".format(err_type, err_msg, chain, full_tb)
+
+        # Also write to stderr for logcat visibility
+        print("JM_BRIDGE_ERROR: " + formatted, file=sys.stderr)
+
         return json.dumps({
             "success": False,
-            "error": err_msg,
-            "traceback": buf.getvalue()
+            "error": "[{}] {}{}".format(err_type, err_msg, chain),
+            "traceback": full_tb,
         })
