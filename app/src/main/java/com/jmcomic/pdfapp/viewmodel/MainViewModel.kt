@@ -14,6 +14,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 data class PdfInfo(
     val name: String,
@@ -102,7 +105,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val py = withContext(Dispatchers.IO) { Python.getInstance() }
             val module = withContext(Dispatchers.IO) { py.getModule("jm_bridge") }
             val jsonStr = withContext(Dispatchers.IO) {
-                module.callAttr("get_pdf_path", albumId, outDir).toString()
+                module.callAttr(
+                    "get_pdf_path", albumId, outDir,
+                    ""
+                ).toString()
             }
             Log.d(TAG, "json result: " + jsonStr.take(500))
 
@@ -110,7 +116,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val success = json.optBoolean("success", false)
             val pdfPath = json.optString("pdf_path", "")
             val error = json.optString("error", "")
+            val userMessage = json.optString("user_message", "")
             val tb = json.optString("traceback", "")
+
+            // logcat 里记录完整技术信息
+            if (!success && tb.isNotBlank()) {
+                Log.e(TAG, "Python error traceback:\n$tb")
+            }
 
             if (success) {
                 _uiState.value = _uiState.value.copy(
@@ -122,8 +134,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     lastPdf = PdfInfo(name = File(pdfPath).name, path = pdfPath)
                 )
             } else {
-                val errMsg = (if (tb.isNotBlank()) tb else error)
-                    .take(500).ifBlank { "下载失败，无详细信息" }
+                // 优先使用 Python 端翻译好的简短消息
+                val errMsg = userMessage.ifBlank {
+                    "下载失败"
+                }
                 _uiState.value = _uiState.value.copy(
                     status = DownloadStatus.Error(errMsg),
                     errorMessage = errMsg,
@@ -133,7 +147,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Python download failed", e)
-            val errMsg = "${e.javaClass.simpleName}: ${e.message ?: "(null)"}"
+            val errMsg = translateKotlinException(e)
             _uiState.value = _uiState.value.copy(
                 status = DownloadStatus.Error(errMsg),
                 errorMessage = errMsg,
@@ -144,6 +158,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             pollJob.cancel()
             // Delete stale progress file
             try { File(outputDir, "progress.json").delete() } catch (_: Exception) {}
+        }
+    }
+
+    /** 将 Kotlin 异常翻译为简短中文。 */
+    private fun translateKotlinException(e: Exception): String {
+        return when {
+            e is ConnectException || e is UnknownHostException -> "网络连接失败"
+            e is SocketTimeoutException -> "连接超时"
+            else -> "应用错误"
         }
     }
 

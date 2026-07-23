@@ -39,6 +39,8 @@ done
 
 APP_HOME=$( cd "${APP_HOME:-./}" > /dev/null && pwd -P ) || exit
 
+APP_BASE_NAME=$( basename "$0" )
+
 # Use the maximum available, or set MAX_FD != -1 to use that value.
 MAX_FD=maximum
 
@@ -99,15 +101,8 @@ if ! "$cygwin" && ! "$darwin" && ! "$nonstop" ; then
     esac
 fi
 
-# Collect all arguments for the java command, stacking them for the java command
-DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
-
 # Collect all arguments for the java command
-set -- \
-        "-Dorg.gradle.appname=$APP_BASE_NAME" \
-        -classpath "$CLASSPATH" \
-        org.gradle.wrapper.GradleWrapperMain \
-        "$@"
+DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
 
 # Stop when "xargs" is not available.
 if ! "$cygwin" && ! "$msys" ; then
@@ -124,11 +119,16 @@ if "$cygwin" || "$msys" ; then
     JAVACMD=$( cygpath --unix "$JAVACMD" )
 fi
 
+# Collect all arguments for the java command (after path conversion so
+# CLASSPATH uses the correct format)
+set -- \
+        "-Dorg.gradle.appname=$APP_BASE_NAME" \
+        -classpath "$CLASSPATH" \
+        org.gradle.wrapper.GradleWrapperMain \
+        "$@"
+
 exec "$JAVACMD" \
     $DEFAULT_JVM_OPTS \
     $JAVA_OPTS \
     $GRADLE_OPTS \
-    "-Dorg.gradle.appname=$APP_BASE_NAME" \
-    -classpath "$CLASSPATH" \
-    org.gradle.wrapper.GradleWrapperMain \
     "$@"

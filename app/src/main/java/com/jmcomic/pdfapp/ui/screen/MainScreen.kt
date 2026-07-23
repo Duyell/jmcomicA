@@ -308,12 +308,13 @@ private fun ErrorSection(message: String) {
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold
         )
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
         Text(
             message,
-            color = ErrorRed.copy(alpha = 0.8f),
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center
+            color = TextPrimary.copy(alpha = 0.85f),
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Start,
+            lineHeight = 22.sp
         )
     }
 }

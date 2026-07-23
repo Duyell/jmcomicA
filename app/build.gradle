@@ -40,8 +40,7 @@ android {
             buildPython 'D:/Tools/Python3.11/python.exe'
             pip {
                 install '../local_wheels/jmcomic-2.7.2-py3-none-any.whl'
-                // lxml has native C libs incompatible with Android; jmcomic falls back to html.parser
-                install 'Pillow'
+                install 'Pillow==9.2.0'
                 install 'pyyaml'
                 install 'commonx'
                 install 'requests'

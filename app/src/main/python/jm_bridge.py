@@ -119,27 +119,164 @@ def _write_progress(output_dir, stage, current=0, total=0, message=""):
 
 def _detect_emulator_proxy():
     """
-    On Android emulators, the host machine's proxy at 10.0.2.2 is used to
-    reach blocked sites. On real devices, users have system VPN apps so
-    no explicit proxy is needed. Returns proxy URL or empty string.
+    Auto-detect a local HTTP proxy on common ports.
+    Tries 10.0.2.2 (Android emulator host) and 127.0.0.1 (real device).
+    Returns proxy URL or empty string.
     """
     import socket
-    for port in (10808, 7890, 10809):
-        try:
-            s = socket.socket()
-            s.settimeout(0.5)
-            s.connect(('10.0.2.2', port))
-            s.close()
-            return 'http://10.0.2.2:{}'.format(port)
-        except Exception:
-            pass
+    for host in ('10.0.2.2', '127.0.0.1'):
+        for port in (7897, 7890, 10809, 10808):
+            try:
+                s = socket.socket()
+                s.settimeout(0.3)
+                s.connect((host, port))
+                s.close()
+                return 'http://{}:{}'.format(host, port)
+            except Exception:
+                pass
     return ''
 
 
-def download_album_as_pdf(album_id: str, output_dir: str) -> str:
+def _translate_error(exc: Exception) -> str:
+    """将 Python 异常翻译为简短中文消息（10字以内）。"""
+    exc_type = type(exc).__name__
+    exc_msg = str(exc) if str(exc) else ""
+
+    # 网络 / 连接类
+    if exc_type in ('ConnectionError', 'MaxRetryError', 'NewConnectionError',
+                    'ProtocolError', 'RemoteDisconnected', 'RequestRetryAllFailException'):
+        return '网络连接失败'
+
+    if 'Timeout' in exc_type or 'timeout' in exc_msg.lower():
+        return '连接超时'
+
+    if 'ProxyError' in exc_type:
+        return '代理连接失败'
+
+    if 'SSLError' in exc_type:
+        return '证书验证失败'
+
+    # JM 业务类
+    if 'MissingAlbumPhotoException' in exc_type or 'MissingAlbumPhoto' in exc_type:
+        return '漫画不存在'
+
+    if 'JsonDataException' in exc_type or 'JmException' in exc_type:
+        return '服务器异常'
+
+    if 'AssertionError' in exc_type:
+        return '请求被拒'
+
+    # 文件 / 本地类
+    if exc_type == 'FileNotFoundError':
+        return '文件未找到'
+
+    if 'Permission' in exc_type:
+        return '权限不足'
+
+    # 导入 / 模块类
+    if exc_type in ('ImportError', 'ModuleNotFoundError'):
+        return '模块加载失败'
+
+    # 数据解析类
+    if 'JSONDecodeError' in exc_type or 'YAMLError' in exc_type:
+        return '数据解析失败'
+
+    # RuntimeError
+    if exc_type == 'RuntimeError':
+        if 'no valid images' in exc_msg:
+            return '无有效图片'
+        if 'BitmapFactory' in exc_msg:
+            return '图片解码失败'
+
+    # 兜底
+    return '下载失败'
+
+
+# 官方域名自动探测开关。开启后，当用户未填「备用域名」时，会依次尝试 JM 官方
+# 永久跳转链接与官方发布页来自动获取最新可用域名，让你无需手动知道任何域名。
+# 这两个官方源与库内置的字节云(newsvr)自动更新是*不同*的域名，在部分地区
+# 可能绕开封锁，从而让「无需手动填域名也能用」成为可能。
+OFFICIAL_DOMAIN_DISCOVERY = True
+
+
+def _host_of(url: str):
+    """从 URL 中提取 host（去掉端口），失败返回空串。"""
+    try:
+        from urllib.parse import urlparse
+        netloc = urlparse(url).netloc
+        return netloc.split(':')[0]
+    except Exception:
+        return ''
+
+
+def _discover_jm_domains(proxy: str):
+    """
+    自动探测可用的 JM 域名（零用户知识）。
+
+    探测顺序:
+      1) JM 官方永久跳转链接  jm365.work/3YeBdF -> 当前可用域名
+      2) JM 官方发布页        jmcomicgo.org       -> 列出全部域名
+
+    返回去重后的域名列表；两个官方源都不可达时返回 []（调用方会退回
+    库内置默认域名 + 字节云自动更新，保留原有行为）。
+    """
+    if not OFFICIAL_DOMAIN_DISCOVERY:
+        return []
+
+    try:
+        from jmcomic.jm_config import JmModuleConfig
+    except Exception as e:
+        print("JM_DISCOVER: cannot import JmModuleConfig:", e, file=sys.stderr)
+        return []
+
+    import socket
+    found = []
+    old_to = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(10)  # 限时，避免网络不可达时卡死
+    try:
+        # 1) 官方永久跳转链接：jm365.work/3YeBdF -> 当前可用域名
+        try:
+            url = JmModuleConfig.get_html_url()
+            host = _host_of(url)
+            if host and 'jm365' not in host.lower():
+                found.append(host)
+                print("JM_DISCOVER: via permanent-link ->", host, file=sys.stderr)
+        except Exception as e:
+            print("JM_DISCOVER: permanent-link failed:", repr(e), file=sys.stderr)
+
+        # 2) 官方发布页：jmcomicgo.org 列出全部域名
+        if not found:
+            try:
+                doms = JmModuleConfig.get_html_domain_all()
+                for d in doms:
+                    d = (d or '').strip()
+                    if d and not d.lower().startswith('jm365'):
+                        found.append(d)
+                print("JM_DISCOVER: via pub-page ->", found, file=sys.stderr)
+            except Exception as e:
+                print("JM_DISCOVER: pub-page failed:", repr(e), file=sys.stderr)
+    finally:
+        socket.setdefaulttimeout(old_to)
+
+    # 去重保序
+    seen = set()
+    result = []
+    for d in found:
+        dl = d.lower()
+        if dl not in seen:
+            seen.add(dl)
+            result.append(d)
+    return result
+
+
+def download_album_as_pdf(album_id: str, output_dir: str,
+                          proxy_url: str = "") -> str:
     """
     Download a JM comic album and convert all images to a single PDF.
     Returns the path to the generated PDF file.
+
+    :param proxy_url:  显式代理地址，如 http://127.0.0.1:7890 。
+                        为空时退回 emulator 自动探测；仍为空则不使用代理(直连)。
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -176,7 +313,10 @@ def download_album_as_pdf(album_id: str, output_dir: str) -> str:
 
     JmImageResp.transfer_to = _patched_transfer_to
 
-    proxy = _detect_emulator_proxy()
+    # 代理优先级：用户显式代理 > emulator 自动探测 > 不使用代理(直连)
+    proxy = (proxy_url or '').strip()
+    if not proxy:
+        proxy = _detect_emulator_proxy()
     proxy_yaml = ''
     if proxy:
         proxy_yaml = """
@@ -184,22 +324,54 @@ def download_album_as_pdf(album_id: str, output_dir: str) -> str:
         http: {proxy}
         https: {proxy}""".format(proxy=proxy)
 
+    # 若设置了代理，让域名自动探测也走代理（官方域名源可能也需要代理才能连通）
+    _proxy_env_saved = {}
+    if proxy:
+        for _k in ('http_proxy', 'https_proxy'):
+            _proxy_env_saved[_k] = os.environ.get(_k)
+            os.environ[_k] = proxy
+
+    # 域名解析：自动探测官方域名（jm365.work 永久跳转 / jmcomicgo.org 发布页）
+    # 作为唯一机制；若两个官方源都不可达，则退回库内置默认域名+字节云自动更新。
+    domain_list = []
+    discover_src = 'default'
+    if not domain_list:
+        try:
+            domain_list = _discover_jm_domains(proxy)
+            discover_src = 'auto' if domain_list else 'default'
+        finally:
+            # 还原代理环境变量，避免影响后续下载逻辑
+            for _k, _v in _proxy_env_saved.items():
+                if _v is None:
+                    os.environ.pop(_k, None)
+                else:
+                    os.environ[_k] = _v
+
+    domain_yaml = ''
+    if domain_list:
+        lines = "\n".join("    - {}".format(d) for d in domain_list)
+        domain_yaml = "\n  domain:\n{}".format(lines)
+
+    print("JM_BRIDGE_CONFIG: proxy={!r} domain_source={} domains={}".format(
+        proxy, discover_src, domain_list), file=sys.stderr)
+
     option_text = """
 client:
-  impl: api
+  impl: api{domain_yaml}
   postman:
     type: requests
     meta_data:
       timeout: 30{proxy_yaml}
 
 dir_rule:
-  rule: Bd_Aid
+  rule: Bd_Aid_{{Pindextitle}}
   base_dir: {output_dir}/downloads
 
 plugins:
   after_album: []
 """.format(output_dir=output_dir.replace('\\', '/'),
-           proxy_yaml=proxy_yaml)
+           proxy_yaml=proxy_yaml,
+           domain_yaml=domain_yaml)
 
     option = jmcomic.create_option_by_str(option_text)
     album_id = str(album_id).strip()
@@ -215,7 +387,9 @@ plugins:
         _write_progress(output_dir, "unscramble", 0, len(_image_meta), "解扰图片...")
         _unscramble_via_android(_image_meta, output_dir)
 
-        all_image_paths = _collect_images(download_base)
+        # Collect images via album object hierarchy (album → photos → images),
+        # which preserves chapter order even for multi-chapter comics.
+        all_image_paths = _collect_images_from_album(album, download_base)
 
         if not all_image_paths:
             raise FileNotFoundError(
@@ -317,19 +491,41 @@ def _save_bitmap_as_jpeg(bitmap, webp_filepath: str):
         pass
 
 
-def _collect_images(base_dir: str) -> list:
+def _collect_images_from_album(album, download_base: str) -> list:
     """
-    Recursively collect all image files under base_dir, sorted by name.
+    Collect all downloaded image paths from the album object, in chapter order.
+
+    Iterates album → photos (chapters) → images, using each image's
+    ``save_path`` (set by jmcomic's downloader). Images are ordered by
+    chapter then by filename within each chapter.
+
+    Returns a flat list of absolute file paths ready for PDF composition.
     """
     extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
-    images = []
-    for root, dirs, files in os.walk(base_dir):
-        for f in files:
-            if os.path.splitext(f)[1].lower() in extensions:
-                images.append(os.path.join(root, f))
-    # Sort by filename for correct page order
-    images.sort(key=lambda p: os.path.basename(p))
-    return images
+    all_paths = []
+    for photo in album:
+        for image in photo:
+            path = getattr(image, 'save_path', None)
+            if path and os.path.isfile(path):
+                all_paths.append(path)
+            else:
+                # Fallback: search download_base for matching filename
+                fname = getattr(image, 'filename', '') or getattr(image, 'img_file_name', '')
+                if fname:
+                    for root, _dirs, files in os.walk(download_base):
+                        if fname in files:
+                            all_paths.append(os.path.join(root, fname))
+                            break
+
+    if not all_paths:
+        # Last resort: walk the download tree (old behaviour)
+        for root, dirs, files in os.walk(download_base):
+            dirs.sort()
+            for f in sorted(files):
+                if os.path.splitext(f)[1].lower() in extensions:
+                    all_paths.append(os.path.join(root, f))
+
+    return all_paths
 
 
 def _decode_image_via_android(filepath: str):
@@ -459,41 +655,47 @@ def _cleanup_dir(dir_path: str):
         print("cleanup warning: " + str(e))
 
 
-def get_pdf_path(album_id: str, output_dir: str) -> str:
+def get_pdf_path(album_id: str, output_dir: str,
+                 proxy_url: str = "") -> str:
     """
     Entry point called from Kotlin via Chaquopy.
     Returns a JSON string with the result.
 
+    :param proxy_url:  显式代理地址(可选)。为空时退回 emulator 探测/直连。
+
     On success: {"success": true, "pdf_path": "/path/to/file.pdf"}
-    On failure: {"success": false, "error": "ExceptionType: message", "traceback": "..."}
+    On failure: {"success": false, "error": "...", "user_message": "中文提示", "traceback": "..."}
     """
     try:
-        pdf_path = download_album_as_pdf(album_id, output_dir)
+        pdf_path = download_album_as_pdf(album_id, output_dir,
+                                         proxy_url=proxy_url)
         return json.dumps({"success": True, "pdf_path": pdf_path})
     except Exception as e:
-        # Build a CLEAR error: type + message FIRST, then full traceback
+        # 构建技术错误信息（仅用于日志）
         err_type = type(e).__name__
-        err_msg = str(e) if str(e) else "(no message)"
+        err_msg = str(e) if str(e) else "(无详细信息)"
 
-        # Walk the full cause chain
+        # 遍历异常链
         cause = e.__cause__
         chain = ""
         while cause is not None:
-            chain += "\nCaused by: {}: {}".format(type(cause).__name__, cause)
+            chain += "\n由以下引发: {}: {}".format(type(cause).__name__, cause)
             cause = cause.__cause__
 
         buf = io.StringIO()
         traceback.print_exc(file=buf)
         full_tb = buf.getvalue()
 
-        # Format: [ExceptionType] message\n\nTraceback...
+        # 技术错误摘要
         formatted = "[{}] {}{}\n\n{}".format(err_type, err_msg, chain, full_tb)
-
-        # Also write to stderr for logcat visibility
         print("JM_BRIDGE_ERROR: " + formatted, file=sys.stderr)
+
+        # 中文用户友好消息
+        user_message = _translate_error(e)
 
         return json.dumps({
             "success": False,
             "error": "[{}] {}{}".format(err_type, err_msg, chain),
+            "user_message": user_message,
             "traceback": full_tb,
         })
