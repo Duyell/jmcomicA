@@ -34,3 +34,4 @@ jmcomic-signing.keyword
 *.log
 *.tmp
 *.zip
+local_wheels/jmcomic-2.7.2-py3-none-any.whl.bak

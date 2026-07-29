@@ -375,21 +375,33 @@ def _collect_images_from_photo(photo, download_base: str,
     except Exception:
         pass
 
-    # Strategy 2: locate chapter directory by title match
+    # Strategy 2: locate chapter directory
     title = getattr(photo, 'title', None) or ''
-    if album_id and title:
+    if album_id:
         album_dir = os.path.join(download_base, str(album_id))
         if os.path.isdir(album_dir):
-            for dir_name in sorted(os.listdir(album_dir)):
-                if title in dir_name or dir_name in title:
-                    chapter_dir = os.path.join(album_dir, dir_name)
-                    if os.path.isdir(chapter_dir):
-                        for f in sorted(os.listdir(chapter_dir)):
-                            if os.path.splitext(f)[1].lower() in extensions:
-                                paths.append(os.path.join(chapter_dir, f))
-                        return paths
+            subdirs = sorted(os.listdir(album_dir))
+            # 2a: try title match first
+            if title:
+                for dir_name in subdirs:
+                    if title in dir_name or dir_name in title:
+                        chapter_dir = os.path.join(album_dir, dir_name)
+                        if os.path.isdir(chapter_dir):
+                            for f in sorted(os.listdir(chapter_dir)):
+                                if os.path.splitext(f)[1].lower() in extensions:
+                                    paths.append(os.path.join(chapter_dir, f))
+                            return paths
+            # 2b: title empty or no match — use index (jmcomic dirs are
+            #     created in chapter order matching album enumeration)
+            if photo_index is not None and photo_index < len(subdirs):
+                chapter_dir = os.path.join(album_dir, subdirs[photo_index])
+                if os.path.isdir(chapter_dir):
+                    for f in sorted(os.listdir(chapter_dir)):
+                        if os.path.splitext(f)[1].lower() in extensions:
+                            paths.append(os.path.join(chapter_dir, f))
+                    return paths
 
-    # Strategy 3: fallback — walk entire download_base (last resort)
+    # Strategy 3: last resort — walk entire download_base
     for root, dirs, files in os.walk(download_base):
         dirs.sort()
         for f in sorted(files):
@@ -1164,7 +1176,7 @@ def download_selected_chapters(album_id: str, selected_indices_json: str,
 
         try:
             chapter_images = _collect_images_from_photo(
-                photo, download_base, album_id=str(album_id))
+                photo, download_base, album_id=str(album_id), photo_index=i)
             if not chapter_images:
                 pdfs.append({
                     "chapter_index": i,
