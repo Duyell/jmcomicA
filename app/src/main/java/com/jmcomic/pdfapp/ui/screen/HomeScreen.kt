@@ -23,10 +23,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,20 +52,38 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.jmcomic.pdfapp.ui.theme.AccentPink
-import com.jmcomic.pdfapp.ui.theme.AccentPinkDim
+import com.jmcomic.pdfapp.model.ChapterDownloadResult
+import com.jmcomic.pdfapp.model.DownloadStatus
+import com.jmcomic.pdfapp.ui.theme.AccentBlue
+import com.jmcomic.pdfapp.ui.theme.AccentBlueDim
 import com.jmcomic.pdfapp.ui.theme.ErrorRed
 import com.jmcomic.pdfapp.ui.theme.SuccessGreen
 import com.jmcomic.pdfapp.ui.theme.SurfaceContainer
 import com.jmcomic.pdfapp.ui.theme.SurfaceDark
 import com.jmcomic.pdfapp.ui.theme.TextPrimary
 import com.jmcomic.pdfapp.ui.theme.TextSecondary
-import com.jmcomic.pdfapp.viewmodel.DownloadStatus
-import com.jmcomic.pdfapp.viewmodel.MainViewModel
+import com.jmcomic.pdfapp.viewmodel.HomeViewModel
 
 @Composable
-fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
+fun HomeScreen(
+    viewModel: HomeViewModel,
+    onOpenPdf: (String) -> Unit = {}
+) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Chapter selection dialog
+    if (uiState.showChapterDialog) {
+        ChapterSelectDialog(
+            albumTitle = uiState.albumTitle,
+            chapters = uiState.chapters,
+            selectedChapters = uiState.selectedChapters,
+            onToggle = viewModel::onToggleChapter,
+            onSelectAll = viewModel::onSelectAll,
+            onDeselectAll = viewModel::onDeselectAll,
+            onConfirm = viewModel::onConfirmChapterSelection,
+            onDismiss = viewModel::onChapterDialogDismiss,
+        )
+    }
 
     Column(
         modifier = Modifier.fillMaxSize()
@@ -104,10 +124,10 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = TextPrimary,
                     unfocusedTextColor = TextPrimary,
-                    cursorColor = AccentPink,
-                    focusedBorderColor = AccentPink,
+                    cursorColor = AccentBlue,
+                    focusedBorderColor = AccentBlue,
                     unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f),
-                    focusedLabelColor = AccentPink,
+                    focusedLabelColor = AccentBlue,
                     unfocusedLabelColor = TextSecondary,
                     focusedContainerColor = Color.Transparent,
                     unfocusedContainerColor = Color.Transparent,
@@ -117,17 +137,20 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
 
             Spacer(Modifier.height(20.dp))
 
+            val isBusy = uiState.status is DownloadStatus.Downloading
+                    || uiState.status is DownloadStatus.FetchingInfo
+
             Button(
-                onClick = viewModel::startDownload,
+                onClick = viewModel::onDownloadTapped,
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                 contentPadding = PaddingValues(0.dp),
-                enabled = uiState.status !is DownloadStatus.Downloading
+                enabled = !isBusy
             ) {
                 Box(
                     Modifier.fillMaxSize().background(
-                        Brush.horizontalGradient(listOf(AccentPink, AccentPinkDim)),
+                        Brush.horizontalGradient(listOf(AccentBlue, AccentBlueDim)),
                         RoundedCornerShape(14.dp)
                     ),
                     contentAlignment = Alignment.Center
@@ -144,7 +167,7 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
                         )
                         Spacer(Modifier.width(10.dp))
                         Text(
-                            "下载 PDF",
+                            if (isBusy) "处理中..." else "下载 PDF",
                             style = MaterialTheme.typography.titleMedium,
                             color = Color.White,
                             fontWeight = FontWeight.SemiBold
@@ -166,25 +189,27 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
                 when (val status = uiState.status) {
                     is DownloadStatus.Idle -> {}
 
-                    is DownloadStatus.Downloading -> DownloadingSection(uiState)
+                    is DownloadStatus.FetchingInfo -> FetchingSection(uiState.progressMessage)
 
-                    is DownloadStatus.Success -> SuccessSection(uiState, onOpenPdf)
+                    is DownloadStatus.Downloading -> DownloadingSection(
+                        uiState.progressMessage,
+                        uiState.progressFraction,
+                    )
 
-                    is DownloadStatus.Error -> ErrorSection(status.message)
-                }
-            }
-        }
+                    is DownloadStatus.Success -> {
+                        // Show per-chapter results if available
+                        if (uiState.chapterResults.isNotEmpty()) {
+                            MultiChapterSuccessSection(
+                                results = uiState.chapterResults,
+                                onOpenPdf = onOpenPdf,
+                                onDismiss = viewModel::dismissSuccess,
+                            )
+                        } else {
+                            SingleSuccessSection(uiState, onOpenPdf)
+                        }
+                    }
 
-        // ── 上次查看 ──
-        AnimatedVisibility(
-            visible = uiState.lastPdf != null && uiState.status !is DownloadStatus.Success,
-            enter = fadeIn() + slideInVertically { it / 2 },
-            exit = fadeOut()
-        ) {
-            uiState.lastPdf?.let { pdf ->
-                Column {
-                    Spacer(Modifier.height(32.dp))
-                    LastViewedSection(pdf, onOpenPdf, viewModel::deleteLastPdf)
+                    is DownloadStatus.Error -> ErrorSection(status.message, viewModel::dismissError)
                 }
             }
         }
@@ -193,8 +218,10 @@ fun MainScreen(viewModel: MainViewModel, onOpenPdf: (String) -> Unit = {}) {
     }
 }
 
+// ── Status sub-sections ──────────────────────────────────────
+
 @Composable
-private fun DownloadingSection(uiState: com.jmcomic.pdfapp.viewmodel.DownloadUiState) {
+private fun FetchingSection(message: String) {
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
@@ -202,33 +229,57 @@ private fun DownloadingSection(uiState: com.jmcomic.pdfapp.viewmodel.DownloadUiS
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        if (uiState.progressFraction != null) {
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth().height(6.dp)
+                .clip(RoundedCornerShape(3.dp)),
+            color = AccentBlue,
+            trackColor = SurfaceContainer,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text(
+            message.ifBlank { "获取漫画信息..." },
+            color = TextSecondary,
+            style = MaterialTheme.typography.bodyMedium
+        )
+    }
+}
+
+@Composable
+private fun DownloadingSection(message: String, fraction: Float?) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceContainer.copy(alpha = 0.5f))
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (fraction != null) {
             LinearProgressIndicator(
-                progress = { uiState.progressFraction!! },
+                progress = { fraction },
                 modifier = Modifier.fillMaxWidth().height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
-                color = AccentPink,
+                color = AccentBlue,
                 trackColor = SurfaceContainer,
             )
         } else {
             LinearProgressIndicator(
                 modifier = Modifier.fillMaxWidth().height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
-                color = AccentPink,
+                color = AccentBlue,
                 trackColor = SurfaceContainer,
             )
         }
         Spacer(Modifier.height(12.dp))
         Text(
-            uiState.progressMessage.ifBlank { "正在下载..." },
+            message.ifBlank { "正在下载..." },
             color = TextSecondary,
             style = MaterialTheme.typography.bodyMedium
         )
-        if (uiState.progressFraction != null) {
+        if (fraction != null) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "${(uiState.progressFraction!! * 100).toInt()}%",
-                color = AccentPink,
+                "${(fraction * 100).toInt()}%",
+                color = AccentBlue,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -237,8 +288,8 @@ private fun DownloadingSection(uiState: com.jmcomic.pdfapp.viewmodel.DownloadUiS
 }
 
 @Composable
-private fun SuccessSection(
-    uiState: com.jmcomic.pdfapp.viewmodel.DownloadUiState,
+private fun SingleSuccessSection(
+    uiState: com.jmcomic.pdfapp.model.HomeUiState,
     onOpenPdf: (String) -> Unit
 ) {
     Column(
@@ -282,7 +333,7 @@ private fun SuccessSection(
             colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen)
         ) {
             Icon(
-                Icons.Rounded.OpenInNew,
+                Icons.AutoMirrored.Rounded.OpenInNew,
                 contentDescription = null,
                 tint = Color.White,
                 modifier = Modifier.size(18.dp)
@@ -294,7 +345,116 @@ private fun SuccessSection(
 }
 
 @Composable
-private fun ErrorSection(message: String) {
+private fun MultiChapterSuccessSection(
+    results: List<ChapterDownloadResult>,
+    onOpenPdf: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(SuccessGreen.copy(alpha = 0.08f))
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier.size(48.dp).clip(CircleShape)
+                .background(SuccessGreen.copy(alpha = 0.18f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Rounded.CheckCircle,
+                contentDescription = null,
+                tint = SuccessGreen,
+                modifier = Modifier.size(26.dp)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "下载完成 (${results.count { it.pdfPath != null }}/${results.size})",
+            color = TextPrimary,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        // Per-chapter result cards
+        for (r in results) {
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SurfaceContainer.copy(alpha = 0.6f))
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (r.pdfPath != null) {
+                    Icon(
+                        Icons.Rounded.CheckCircle,
+                        contentDescription = null,
+                        tint = SuccessGreen,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Icon(
+                        Icons.Rounded.ErrorOutline,
+                        contentDescription = null,
+                        tint = ErrorRed,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = r.chapterTitle,
+                    color = TextPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (r.pdfPath != null) {
+                    Button(
+                        onClick = { onOpenPdf(r.pdfPath) },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.OpenInNew,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("查看", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    Text(
+                        r.error ?: "失败",
+                        color = ErrorRed,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Dismiss button
+        Button(
+            onClick = onDismiss,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = TextSecondary.copy(alpha = 0.15f)),
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)
+        ) {
+            Text("完成", color = TextPrimary, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun ErrorSection(message: String, onDismiss: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
@@ -316,86 +476,14 @@ private fun ErrorSection(message: String) {
             textAlign = TextAlign.Start,
             lineHeight = 22.sp
         )
-    }
-}
-
-@Composable
-private fun LastViewedSection(
-    pdf: com.jmcomic.pdfapp.viewmodel.PdfInfo,
-    onOpenPdf: (String) -> Unit,
-    onDelete: () -> Unit
-) {
-    Column {
-        Text(
-            "上次查看",
-            color = TextSecondary.copy(alpha = 0.6f),
-            style = MaterialTheme.typography.labelSmall,
-            letterSpacing = 2.sp,
-            modifier = Modifier.padding(start = 4.dp, bottom = 10.dp)
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
-                .background(SurfaceContainer)
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onDismiss,
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed.copy(alpha = 0.12f)),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 6.dp)
         ) {
-            Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(12.dp))
-                    .background(AccentPink.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Rounded.Description,
-                    contentDescription = null,
-                    tint = AccentPink,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-            Spacer(Modifier.width(14.dp))
-            Text(
-                text = pdf.name,
-                color = TextPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = { onOpenPdf(pdf.path) },
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.OpenInNew,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text("查看", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onDelete,
-                shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = ErrorRed.copy(alpha = 0.12f)
-                ),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.DeleteOutline,
-                    contentDescription = null,
-                    tint = ErrorRed,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text("删除", color = ErrorRed, style = MaterialTheme.typography.labelLarge)
-            }
+            Text("关闭", color = ErrorRed, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

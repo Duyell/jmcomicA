@@ -117,6 +117,16 @@ def _write_progress(output_dir, stage, current=0, total=0, message=""):
         pass
 
 
+def _debug_log(output_dir, msg):
+    """Append a debug line to debug.log (readable via adb run-as)."""
+    try:
+        path = os.path.join(output_dir, "debug.log")
+        with open(path, 'a') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
+
+
 def _detect_emulator_proxy():
     """
     Auto-detect a local HTTP proxy on common ports.
@@ -269,6 +279,129 @@ def _discover_jm_domains(proxy: str):
     return result
 
 
+# ---------------------------------------------------------------------------
+#  Shared helpers (used by both old and new entry points)
+# ---------------------------------------------------------------------------
+
+def _build_proxy_config(proxy_url: str = "") -> str:
+    """Return (proxy, proxy_yaml_str)."""
+    proxy = (proxy_url or '').strip()
+    if not proxy:
+        proxy = _detect_emulator_proxy()
+    yaml_str = ''
+    if proxy:
+        yaml_str = """
+      proxies:
+        http: {proxy}
+        https: {proxy}""".format(proxy=proxy)
+    return proxy, yaml_str
+
+
+def _build_option_text(output_dir: str, proxy_yaml: str,
+                       domain_list: list = None) -> str:
+    """Build the jmcomic option YAML string."""
+    odir = output_dir.replace('\\', '/')
+    domain_yaml = ''
+    if domain_list:
+        lines = "\n".join("    - {}".format(d) for d in domain_list)
+        domain_yaml = "\n  domain:\n{}".format(lines)
+
+    return """
+client:
+  impl: api{domain_yaml}
+  postman:
+    type: requests
+    meta_data:
+      timeout: 30{proxy_yaml}
+
+dir_rule:
+  rule: Bd_Aid_{{Pindextitle}}
+  base_dir: {output_dir}/downloads
+
+plugins:
+  after_album: []
+""".format(output_dir=odir, proxy_yaml=proxy_yaml, domain_yaml=domain_yaml)
+
+
+def _discover_domains_with_proxy(proxy: str) -> list:
+    """Run domain discovery, optionally through proxy."""
+    _proxy_env_saved = {}
+    if proxy:
+        for _k in ('http_proxy', 'https_proxy'):
+            _proxy_env_saved[_k] = os.environ.get(_k)
+            os.environ[_k] = proxy
+
+    domain_list = []
+    try:
+        domain_list = _discover_jm_domains(proxy)
+    finally:
+        for _k, _v in _proxy_env_saved.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+    return domain_list
+
+
+def _collect_images_from_photo(photo, download_base: str,
+                               album_id: str = None,
+                               photo_index: int = None) -> list:
+    """
+    Collect all downloaded image paths for a single photo/chapter.
+
+    When page_arr is populated (full download_album flow), iterates
+    the photo object directly.  When page_arr is None (selective
+    download via get_album_detail), locates the chapter directory by
+    matching the photo's title inside the album directory.
+    """
+    extensions = {'.jpg', '.jpeg', '.png', '.webp', '.bmp'}
+    paths = []
+
+    # Strategy 1: iterate photo object (full download_album path)
+    try:
+        for image in photo:
+            path = getattr(image, 'save_path', None)
+            if path and os.path.isfile(path):
+                paths.append(path)
+            elif path:
+                base = os.path.splitext(path)[0]
+                for ext in ('.jpg', '.jpeg', '.png'):
+                    alt = base + ext
+                    if os.path.isfile(alt):
+                        paths.append(alt)
+                        break
+        if paths:
+            return paths
+    except Exception:
+        pass
+
+    # Strategy 2: locate chapter directory by title match
+    title = getattr(photo, 'title', None) or ''
+    if album_id and title:
+        album_dir = os.path.join(download_base, str(album_id))
+        if os.path.isdir(album_dir):
+            for dir_name in sorted(os.listdir(album_dir)):
+                if title in dir_name or dir_name in title:
+                    chapter_dir = os.path.join(album_dir, dir_name)
+                    if os.path.isdir(chapter_dir):
+                        for f in sorted(os.listdir(chapter_dir)):
+                            if os.path.splitext(f)[1].lower() in extensions:
+                                paths.append(os.path.join(chapter_dir, f))
+                        return paths
+
+    # Strategy 3: fallback — walk entire download_base (last resort)
+    for root, dirs, files in os.walk(download_base):
+        dirs.sort()
+        for f in sorted(files):
+            if os.path.splitext(f)[1].lower() in extensions:
+                paths.append(os.path.join(root, f))
+    return paths
+
+
+# ---------------------------------------------------------------------------
+#  Original entry point (single merged PDF — kept for backward compatibility)
+# ---------------------------------------------------------------------------
+
 def download_album_as_pdf(album_id: str, output_dir: str,
                           proxy_url: str = "") -> str:
     """
@@ -379,7 +512,7 @@ plugins:
     download_base = os.path.join(output_dir, "downloads")
 
     try:
-        _write_progress(output_dir, "connecting", 0, 0, "获取漫画信息...")
+        _write_progress(output_dir, "downloading", 0, 0, "下载图片中...")
 
         album, downloader = jmcomic.download_album(album_id, option)
         downloader.raise_if_has_exception()
@@ -699,3 +832,367 @@ def get_pdf_path(album_id: str, output_dir: str,
             "user_message": user_message,
             "traceback": full_tb,
         })
+
+
+# ---------------------------------------------------------------------------
+#  v1.2: Chapter-aware functions
+# ---------------------------------------------------------------------------
+
+def _get_jm_client(option):
+    """
+    Try multiple strategies to extract an API client from a JmOption.
+    Returns a client object with ``get_album_detail(album_id)``.
+    """
+    # Strategy 1: explicit build methods (most reliable)
+    for method in ('new_jm_client', 'build_jm_client', 'new_client',
+                   'build_client', '_build_client'):
+        fn = getattr(option, method, None)
+        if callable(fn):
+            try:
+                obj = fn()
+                # Check the CLASS, not the instance (jmcomic objects have
+                # custom __getattr__ that makes hasattr unreliable).
+                if hasattr(type(obj), 'get_album_detail'):
+                    return obj
+            except Exception:
+                pass
+
+    # Strategy 2: direct property, but verify on type() to avoid
+    # false positives from jmcomic's dict-like __getattr__.
+    for attr in ('client', '_client'):
+        obj = getattr(option, attr, None)
+        if obj is not None and hasattr(type(obj), 'get_album_detail'):
+            return obj
+
+    # Strategy 3: manual construction via JmModuleConfig
+    try:
+        from jmcomic.jm_config import JmModuleConfig
+        # JmModuleConfig.CLASS_CLIENT maps impl name → class
+        impl = getattr(option, '_client_impl', None) or 'api'
+        cls_map = getattr(JmModuleConfig, 'CLASS_CLIENT', {})
+        client_cls = cls_map.get(impl)
+        if client_cls is not None:
+            postman = getattr(option, '_postman', None)
+            client = client_cls(postman=postman)
+            return client
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Cannot create JM API client from option. "
+        "Available attrs: {}".format(
+            [a for a in dir(option) if 'client' in a.lower() or 'build' in a.lower()]
+        )
+    )
+
+
+def get_album_info(album_id: str, proxy_url: str = "") -> str:
+    """
+    Fetch album metadata (title + chapter list) WITHOUT downloading images.
+
+    Returns JSON:
+      {"success": true, "title": "...", "chapters": [{"index":0,"title":"..."}, ...]}
+      {"success": false, "error": "...", "user_message": "..."}
+    """
+    try:
+        import jmcomic
+        from jmcomic.jm_client_interface import JmImageResp
+    except Exception as _import_err:
+        import traceback as _tb
+        return json.dumps({
+            "success": False,
+            "error": "import failed: {}".format(_import_err),
+            "user_message": "模块加载失败",
+            "traceback": _tb.format_exc(),
+        })
+
+    # Build option (no output_dir needed — we're not downloading)
+    import tempfile
+    tmp_dir = tempfile.mkdtemp(prefix='jm_meta_')
+    try:
+        proxy, proxy_yaml = _build_proxy_config(proxy_url)
+        domain_list = _discover_domains_with_proxy(proxy)
+        option_text = _build_option_text(tmp_dir, proxy_yaml, domain_list)
+        option = jmcomic.create_option_by_str(option_text)
+
+        client = _get_jm_client(option)
+        album_id = str(album_id).strip()
+        album = client.get_album_detail(album_id)
+
+        chapters = []
+        for i, photo in enumerate(album):
+            title = (getattr(photo, 'title', None) or '第{}章'.format(i + 1)).strip()
+            chapters.append({"index": i, "title": title})
+
+        return json.dumps({
+            "success": True,
+            "title": album.title or '',
+            "chapters": chapters,
+        }, ensure_ascii=False)
+    finally:
+        _cleanup_dir(tmp_dir)
+
+
+def _download_album_images(album_id, output_dir, proxy_url):
+    """
+    Download + unscramble ALL images for an album.
+    Used by the legacy single-chapter / merged-PDF path.
+    Returns (album, download_base).
+    """
+    proxy, proxy_yaml = _build_proxy_config(proxy_url)
+    domain_list = _discover_domains_with_proxy(proxy)
+    option_text = _build_option_text(output_dir, proxy_yaml, domain_list)
+
+    print("JM_BRIDGE_CONFIG: proxy={!r} domains={}".format(
+        proxy, domain_list), file=sys.stderr)
+
+    import jmcomic
+    from jmcomic.jm_client_interface import JmImageResp
+
+    _image_meta = {}
+    _orig_transfer_to = JmImageResp.transfer_to
+
+    def _patched_transfer_to(self, path, scramble_id, decode_image=True, img_url=None):
+        with open(path, 'wb') as f:
+            f.write(self.content)
+        if scramble_id is not None and img_url is not None:
+            from jmcomic.jm_toolkit import JmImageTool
+            _image_meta[path] = JmImageTool.get_num_by_url(scramble_id, img_url)
+
+    JmImageResp.transfer_to = _patched_transfer_to
+
+    try:
+        option = jmcomic.create_option_by_str(option_text)
+        album_id = str(album_id).strip()
+
+        # "下载图片中" is more accurate — download_album does both
+        # API fetch + image download in one call.
+        _write_progress(output_dir, "downloading", 0, 0, "下载图片中...")
+
+        album, downloader = jmcomic.download_album(album_id, option)
+        downloader.raise_if_has_exception()
+
+        _write_progress(output_dir, "unscramble", 0, len(_image_meta), "解扰图片...")
+        _unscramble_via_android(_image_meta, output_dir)
+
+        download_base = os.path.join(output_dir, "downloads")
+        return album, download_base
+    finally:
+        try:
+            JmImageResp.transfer_to = _orig_transfer_to
+        except Exception:
+            pass
+
+
+def _get_jm_downloader(option, client):
+    """Try to create a JM downloader from option, using the given client."""
+    for method in ('new_jm_downloader', 'build_jm_downloader',
+                   'new_downloader', 'build_downloader',
+                   '_build_downloader'):
+        fn = getattr(option, method, None)
+        if callable(fn):
+            try:
+                obj = fn(client) if client is not None else fn()
+                if hasattr(type(obj), 'download_photo'):
+                    return obj
+            except Exception:
+                pass
+
+    # fallback: try without client arg
+    for method in ('new_jm_downloader', 'build_jm_downloader',
+                   'new_downloader', 'build_downloader'):
+        fn = getattr(option, method, None)
+        if callable(fn):
+            try:
+                obj = fn()
+                if hasattr(type(obj), 'download_photo'):
+                    return obj
+            except Exception:
+                pass
+
+    raise RuntimeError(
+        "Cannot create JM downloader from option. "
+        "Methods tried: {}".format(
+            [a for a in dir(option) if 'download' in a.lower() or 'build' in a.lower()]
+        )
+    )
+
+
+def _download_selected_photos(album_id, selected_set, output_dir, proxy_url):
+    """
+    Download + unscramble ONLY the selected photos (chapters).
+
+    Uses the jmcomic API client to get album detail, then downloads
+    each selected photo individually via the downloader.
+
+    Returns (album, download_base, total_downloaded).
+    """
+    proxy, proxy_yaml = _build_proxy_config(proxy_url)
+    domain_list = _discover_domains_with_proxy(proxy)
+    option_text = _build_option_text(output_dir, proxy_yaml, domain_list)
+
+    print("JM_BRIDGE_CONFIG: proxy={!r} domains={}".format(
+        proxy, domain_list), file=sys.stderr)
+
+    import jmcomic
+    from jmcomic.jm_client_interface import JmImageResp
+
+    option = jmcomic.create_option_by_str(option_text)
+    client = _get_jm_client(option)
+    _debug_log(output_dir, "client_ok: type={}".format(type(client).__name__))
+    album = client.get_album_detail(str(album_id).strip())
+    _debug_log(output_dir, "album_ok: title={!r} chapters={}".format(
+        album.title, len(list(album))))
+
+    # ---- Patch transfer_to to capture scramble metadata ----
+    _image_meta = {}
+    _orig_transfer_to = JmImageResp.transfer_to
+
+    def _patched_transfer_to(self, path, scramble_id, decode_image=True, img_url=None):
+        with open(path, 'wb') as f:
+            f.write(self.content)
+        if scramble_id is not None and img_url is not None:
+            from jmcomic.jm_toolkit import JmImageTool
+            _image_meta[path] = JmImageTool.get_num_by_url(scramble_id, img_url)
+
+    JmImageResp.transfer_to = _patched_transfer_to
+
+    try:
+        photos_to_dl = [(i, photo) for i, photo in enumerate(album)
+                        if i in selected_set]
+        total_to_dl = len(photos_to_dl)
+        download_base = os.path.join(output_dir, "downloads")
+
+        # ---- Download selected photos only ----
+        if total_to_dl == 0:
+            return album, download_base
+
+        # Use option.download_photo() (jmcomic 2.7.2 exposes this directly on
+        # JmOption as a convenience wrapper around the internal downloader).
+        for idx, (photo_idx, photo) in enumerate(photos_to_dl):
+            title = (getattr(photo, 'title', None) or '第{}章'.format(photo_idx + 1))
+            _write_progress(output_dir, "downloading", idx + 1, total_to_dl,
+                            "下载 {}/{}: {}".format(idx + 1, total_to_dl, title))
+            try:
+                # option.download_photo() takes a photo_id string, not a
+                # photo object (jmcomic 2.7.2: jm_option.py:596).
+                option.download_photo(photo.id)
+            except Exception as e:
+                _debug_log(output_dir,
+                           "download_photo_fail: chapter={} id={} title={!r} err={}".format(
+                               photo_idx, getattr(photo, 'id', '?'), title, e))
+                raise
+
+        # ---- Unscramble downloaded images ----
+        if _image_meta:
+            _write_progress(output_dir, "unscramble", 0, len(_image_meta),
+                            "解扰 {} 张图...".format(len(_image_meta)))
+            _unscramble_via_android(_image_meta, output_dir)
+
+        return album, download_base
+    finally:
+        try:
+            JmImageResp.transfer_to = _orig_transfer_to
+        except Exception:
+            pass
+
+
+def download_selected_chapters(album_id: str, selected_indices_json: str,
+                               output_dir: str,
+                               proxy_url: str = "") -> str:
+    """
+    Download ONLY the selected chapters and generate per-chapter PDFs.
+
+    :param selected_indices_json: JSON-encoded list of int, e.g. "[0, 2, 5]"
+    :returns JSON: {"success": true, "pdfs": [{"chapter_index":0,
+                    "chapter_title":"...", "pdf_path":"..."}, ...]}
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    selected_set = set(int(i) for i in json.loads(selected_indices_json))
+
+    if not selected_set:
+        return json.dumps({
+            "success": False,
+            "error": "No chapters selected",
+            "user_message": "未选择章节",
+        })
+
+    try:
+        album, download_base = _download_selected_photos(
+            album_id, selected_set, output_dir, proxy_url)
+    except Exception as e:
+        # Fallback: if selective download fails (e.g. downloader API
+        # doesn't match), try the full download path.
+        import traceback as _tb2
+        _msg = "JM_SELECTIVE_FALLBACK: {}\n{}".format(e, _tb2.format_exc())
+        # Log to file (stderr may not reach logcat on this device)
+        try:
+            with open(os.path.join(output_dir, "debug.log"), 'a') as _df:
+                _df.write(_msg)
+        except Exception:
+            pass
+        print(_msg, file=sys.stderr)
+        try:
+            album, download_base = _download_album_images(
+                album_id, output_dir, proxy_url)
+        except Exception as e2:
+            return json.dumps({
+                "success": False,
+                "error": str(e2),
+                "user_message": _translate_error(e2),
+            })
+
+    # ---- Generate per-chapter PDFs for selected chapters ----
+    pdfs = []
+    total = len(selected_set)
+    done = 0
+
+    for i, photo in enumerate(album):
+        if i not in selected_set:
+            continue
+
+        done += 1
+        chapter_title = (getattr(photo, 'title', None)
+                         or '第{}章'.format(i + 1)).strip()
+        safe_chapter = _sanitize_filename(chapter_title)
+        pdf_name = "[JM{}] {:03d}_{}.pdf".format(
+            album_id, i + 1, safe_chapter)
+        pdf_path = os.path.join(output_dir, pdf_name)
+
+        _write_progress(output_dir, "pdf", done, total,
+                        "合成PDF {}/{}: {}".format(done, total, chapter_title))
+
+        try:
+            chapter_images = _collect_images_from_photo(
+                photo, download_base, album_id=str(album_id))
+            if not chapter_images:
+                pdfs.append({
+                    "chapter_index": i,
+                    "chapter_title": chapter_title,
+                    "pdf_path": None,
+                    "error": "无图片",
+                })
+                continue
+
+            _images_to_pdf(chapter_images, pdf_path, output_dir)
+            pdfs.append({
+                "chapter_index": i,
+                "chapter_title": chapter_title,
+                "pdf_path": pdf_path,
+            })
+        except Exception as e:
+            pdfs.append({
+                "chapter_index": i,
+                "chapter_title": chapter_title,
+                "pdf_path": None,
+                "error": str(e),
+            })
+
+    # Cleanup
+    _cleanup_dir(download_base)
+    try:
+        os.remove(os.path.join(output_dir, "progress.json"))
+    except Exception:
+        pass
+
+    return json.dumps({"success": True, "pdfs": pdfs}, ensure_ascii=False)
