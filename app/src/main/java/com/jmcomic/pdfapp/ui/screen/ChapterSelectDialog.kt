@@ -45,6 +45,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.jmcomic.pdfapp.model.ChapterInfo
 import com.jmcomic.pdfapp.ui.theme.AccentBlue
 import com.jmcomic.pdfapp.ui.theme.AccentBlueDim
+import com.jmcomic.pdfapp.ui.theme.SuccessGreen
 import com.jmcomic.pdfapp.ui.theme.SurfaceContainer
 import com.jmcomic.pdfapp.ui.theme.SurfaceDark
 import com.jmcomic.pdfapp.ui.theme.TextPrimary
@@ -142,8 +143,10 @@ fun ChapterSelectDialog(
                 }
             }
 
+            val downloadedCount = chapters.count { it.downloaded }
             Text(
-                "已选 ${selectedChapters.size}/${chapters.size} 章",
+                "已选 ${selectedChapters.size}/${chapters.size} 章" +
+                    if (downloadedCount > 0) "  ·  已下载 $downloadedCount 章" else "",
                 color = TextSecondary,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
@@ -182,8 +185,18 @@ fun ChapterSelectDialog(
                             color = if (isSelected) TextPrimary else TextSecondary,
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
+                        if (chapter.downloaded) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "已下载",
+                                color = SuccessGreen,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }

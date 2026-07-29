@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jmcomic.pdfapp.data.DownloadHistoryManager
-import com.jmcomic.pdfapp.model.DownloadRecord
+import com.jmcomic.pdfapp.model.ComicGroup
 import com.jmcomic.pdfapp.model.SettingsUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,26 +19,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    /** Whether the search box is currently visible */
     private val _isSearchVisible = MutableStateFlow(false)
     val isSearchVisible: StateFlow<Boolean> = _isSearchVisible.asStateFlow()
 
-    init {
-        refreshHistory()
-    }
+    init { refreshHistory() }
 
-    /** Reload records from disk and apply current search filter. */
     fun refreshHistory() {
         viewModelScope.launch(Dispatchers.IO) {
             val query = _uiState.value.searchQuery
-            val records = if (query.isBlank()) {
-                historyManager.loadAll()
+            val groups = if (query.isBlank()) {
+                historyManager.loadGroups()
             } else {
                 historyManager.search(query)
             }
             _uiState.value = _uiState.value.copy(
-                records = records,
-                filteredRecords = records,
+                groups = groups,
+                filteredGroups = groups,
             )
         }
     }
@@ -47,40 +43,47 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         _uiState.value = _uiState.value.copy(searchQuery = query)
         viewModelScope.launch(Dispatchers.IO) {
             val filtered = if (query.isBlank()) {
-                historyManager.loadAll()
+                historyManager.loadGroups()
             } else {
                 historyManager.search(query)
             }
-            _uiState.value = _uiState.value.copy(filteredRecords = filtered)
+            _uiState.value = _uiState.value.copy(filteredGroups = filtered)
         }
     }
 
     fun toggleSearch() {
         val newState = !_isSearchVisible.value
         _isSearchVisible.value = newState
-        if (!newState) {
-            // Clear search when hiding
-            onSearchQueryChanged("")
-        }
+        if (!newState) onSearchQueryChanged("")
     }
 
-    fun deleteRecord(pdfPath: String) {
+    fun toggleGroup(albumId: String) {
+        val groups = _uiState.value.filteredGroups.map { g ->
+            if (g.albumId == albumId) g.copy(expanded = !g.expanded) else g
+        }
+        _uiState.value = _uiState.value.copy(filteredGroups = groups)
+    }
+
+    fun deleteChapter(pdfPath: String) {
         viewModelScope.launch(Dispatchers.IO) {
             historyManager.remove(pdfPath)
             refreshHistory()
         }
     }
 
-    /** Format file size for display. */
-    fun formatSize(bytes: Long): String {
-        return when {
-            bytes < 1024 -> "${bytes} B"
-            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-            else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    fun deleteComic(albumId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyManager.removeComic(albumId)
+            refreshHistory()
         }
     }
 
-    /** Format download time for display. */
+    fun formatSize(bytes: Long): String = when {
+        bytes < 1024 -> "${bytes} B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    }
+
     fun formatTime(timestamp: Long): String {
         val sdf = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
         return sdf.format(java.util.Date(timestamp))

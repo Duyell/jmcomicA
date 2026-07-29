@@ -1,11 +1,14 @@
 package com.jmcomic.pdfapp.ui.screen
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,9 +27,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Settings
@@ -51,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.jmcomic.pdfapp.model.ComicGroup
 import com.jmcomic.pdfapp.model.DownloadRecord
 import com.jmcomic.pdfapp.ui.theme.AccentBlue
 import com.jmcomic.pdfapp.ui.theme.ErrorRed
@@ -106,17 +113,13 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = uiState.searchQuery,
                 onValueChange = viewModel::onSearchQueryChanged,
-                placeholder = { Text("搜索漫画标题或ID...") },
+                placeholder = { Text("搜索漫画ID或标题...") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
                     .padding(horizontal = 20.dp, vertical = 8.dp),
                 leadingIcon = {
-                    Icon(
-                        Icons.Rounded.Search,
-                        contentDescription = null,
-                        tint = TextSecondary,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Icon(Icons.Rounded.Search, contentDescription = null,
+                        tint = TextSecondary, modifier = Modifier.size(20.dp))
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
@@ -134,10 +137,11 @@ fun SettingsScreen(
         }
 
         // ── Count ──
+        val totalChapters = uiState.filteredGroups.sumOf { it.chapters.size }
         Text(
             if (uiState.searchQuery.isNotBlank())
-                "搜索结果: ${uiState.filteredRecords.size} 个"
-            else "${uiState.filteredRecords.size} 个已下载",
+                "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章"
+            else "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章",
             color = TextSecondary.copy(alpha = 0.6f),
             style = MaterialTheme.typography.labelSmall,
             letterSpacing = 1.sp,
@@ -145,19 +149,14 @@ fun SettingsScreen(
         )
 
         // ── List ──
-        if (uiState.filteredRecords.isEmpty()) {
-            // Empty state
+        if (uiState.filteredGroups.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize().padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Rounded.Settings,
-                        contentDescription = null,
-                        tint = TextSecondary.copy(alpha = 0.3f),
-                        modifier = Modifier.size(64.dp)
-                    )
+                    Icon(Icons.Rounded.Settings, contentDescription = null,
+                        tint = TextSecondary.copy(alpha = 0.3f), modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
                     Text(
                         if (uiState.searchQuery.isNotBlank()) "未找到匹配的下载记录"
@@ -165,14 +164,6 @@ fun SettingsScreen(
                         color = TextSecondary.copy(alpha = 0.5f),
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    if (uiState.searchQuery.isBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "在首页输入漫画ID开始下载",
-                            color = TextSecondary.copy(alpha = 0.35f),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
                 }
             }
         } else {
@@ -181,26 +172,107 @@ fun SettingsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
             ) {
                 itemsIndexed(
-                    items = uiState.filteredRecords,
-                    key = { _, record -> record.pdfPath }
-                ) { _, record ->
-                    RecordCard(
-                        record = record,
+                    items = uiState.filteredGroups,
+                    key = { _, group -> group.albumId }
+                ) { _, group ->
+                    ComicGroupCard(
+                        group = group,
                         formatSize = viewModel::formatSize,
                         formatTime = viewModel::formatTime,
-                        onOpen = { onOpenPdf(record.pdfPath) },
-                        onDelete = { viewModel.deleteRecord(record.pdfPath) },
+                        onToggle = { viewModel.toggleGroup(group.albumId) },
+                        onOpenPdf = onOpenPdf,
+                        onDeleteChapter = viewModel::deleteChapter,
+                        onDeleteComic = { viewModel.deleteComic(group.albumId) },
                     )
                     Spacer(Modifier.height(8.dp))
                 }
-                item { Spacer(Modifier.height(80.dp)) } // bottom padding for nav bar
+                item { Spacer(Modifier.height(80.dp)) }
             }
         }
     }
 }
 
 @Composable
-private fun RecordCard(
+private fun ComicGroupCard(
+    group: ComicGroup,
+    formatSize: (Long) -> String,
+    formatTime: (Long) -> String,
+    onToggle: () -> Unit,
+    onOpenPdf: (String) -> Unit,
+    onDeleteChapter: (String) -> Unit,
+    onDeleteComic: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(SurfaceContainer)
+    ) {
+        // ── Comic header (always visible) ──
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .clickable(onClick = onToggle)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
+                    .background(AccentBlue.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Description, contentDescription = null,
+                    tint = AccentBlue, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.albumTitle.ifBlank { "JM${group.albumId}" },
+                    color = TextPrimary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "JM${group.albumId} · ${group.chapters.size} 章",
+                    color = TextSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            IconButton(onClick = onDeleteComic) {
+                Icon(Icons.Rounded.DeleteForever, contentDescription = "删除全部",
+                    tint = ErrorRed.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+            }
+            Icon(
+                if (group.expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        // ── Chapter list (expandable) ──
+        AnimatedVisibility(
+            visible = group.expanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            Column {
+                for (record in group.chapters) {
+                    ChapterRow(
+                        record = record,
+                        formatSize = formatSize,
+                        formatTime = formatTime,
+                        onOpen = { onOpenPdf(record.pdfPath) },
+                        onDelete = { onDeleteChapter(record.pdfPath) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChapterRow(
     record: DownloadRecord,
     formatSize: (Long) -> String,
     formatTime: (Long) -> String,
@@ -209,91 +281,42 @@ private fun RecordCard(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(SurfaceContainer)
-            .padding(16.dp),
+            .padding(start = 16.dp, end = 8.dp, bottom = 8.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(AccentBlue.copy(alpha = 0.03f))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Icon
-        Box(
-            Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
-                .background(AccentBlue.copy(alpha = 0.10f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Rounded.Description,
-                contentDescription = null,
-                tint = AccentBlue,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-
-        Spacer(Modifier.width(14.dp))
-
-        // Info
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = record.albumTitle.ifBlank { "JM${record.albumId}" },
-                color = TextPrimary,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
                 text = record.chapterTitle,
-                color = TextSecondary,
+                color = TextPrimary,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                maxLines = 1, overflow = TextOverflow.Ellipsis
             )
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    text = formatTime(record.downloadTime),
-                    color = TextSecondary.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Text(
-                    text = formatSize(record.fileSize),
-                    color = TextSecondary.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.labelSmall,
-                )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(formatTime(record.downloadTime),
+                    color = TextSecondary.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.labelSmall)
+                Text(formatSize(record.fileSize),
+                    color = TextSecondary.copy(alpha = 0.5f),
+                    style = MaterialTheme.typography.labelSmall)
             }
         }
-
-        Spacer(Modifier.width(8.dp))
-
-        // Actions
         Button(
             onClick = onOpen,
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(8.dp),
             colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
         ) {
-            Icon(
-                Icons.AutoMirrored.Rounded.OpenInNew,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(15.dp)
-            )
+            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null,
+                tint = Color.White, modifier = Modifier.size(13.dp))
             Spacer(Modifier.width(4.dp))
-            Text("查看", color = Color.White, style = MaterialTheme.typography.labelLarge)
+            Text("查看", color = Color.White, style = MaterialTheme.typography.labelSmall)
         }
-
-        Spacer(Modifier.width(6.dp))
-
-        IconButton(
-            onClick = onDelete,
-            modifier = Modifier.size(36.dp)
-        ) {
-            Icon(
-                Icons.Rounded.DeleteOutline,
-                contentDescription = "删除",
-                tint = ErrorRed.copy(alpha = 0.6f),
-                modifier = Modifier.size(20.dp)
-            )
+        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+            Icon(Icons.Rounded.DeleteOutline, contentDescription = "删除",
+                tint = ErrorRed.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
         }
     }
 }

@@ -16,6 +16,25 @@ sealed class DownloadStatus {
  */
 data class ChapterInfo(
     val index: Int,
+    val title: String,
+    val downloaded: Boolean = false   // true if this chapter already has a PDF
+)
+
+/**
+ * Group of downloaded chapters belonging to one comic.
+ */
+data class ComicGroup(
+    val albumId: String,
+    val albumTitle: String,
+    val chapters: List<DownloadRecord>,
+    val expanded: Boolean = false
+)
+
+/**
+ * Metadata stored alongside PDFs in comic directory.
+ */
+data class ComicInfo(
+    val albumId: String,
     val title: String
 )
 
@@ -79,5 +98,8 @@ data class HomeUiState(
 data class SettingsUiState(
     val records: List<DownloadRecord> = emptyList(),
     val searchQuery: String = "",
-    val filteredRecords: List<DownloadRecord> = emptyList()
+    val filteredRecords: List<DownloadRecord> = emptyList(),
+    // v1.3: comic-grouped view — primary display mode
+    val groups: List<ComicGroup> = emptyList(),
+    val filteredGroups: List<ComicGroup> = emptyList()
 )

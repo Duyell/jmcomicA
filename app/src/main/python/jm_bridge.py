@@ -127,6 +127,22 @@ def _debug_log(output_dir, msg):
         pass
 
 
+def _write_comic_info(comic_dir, album_id, title):
+    """Write comic_info.json for the settings screen to discover."""
+    try:
+        with open(os.path.join(comic_dir, "comic_info.json"), 'w') as f:
+            json.dump({"album_id": str(album_id), "title": title}, f, ensure_ascii=False)
+    except Exception:
+        pass
+    """Append a debug line to debug.log (readable via adb run-as)."""
+    try:
+        path = os.path.join(output_dir, "debug.log")
+        with open(path, 'a') as f:
+            f.write(msg + '\n')
+    except Exception:
+        pass
+
+
 def _detect_emulator_proxy():
     """
     Auto-detect a local HTTP proxy on common ports.
@@ -543,7 +559,10 @@ plugins:
 
         safe_title = _sanitize_filename(album.title)
         pdf_filename = "[JM{}] {}.pdf".format(album_id, safe_title)
-        pdf_path = os.path.join(output_dir, pdf_filename)
+        comic_dir = os.path.join(output_dir, album_id)
+        os.makedirs(comic_dir, exist_ok=True)
+        pdf_path = os.path.join(comic_dir, pdf_filename)
+        _write_comic_info(comic_dir, album_id, album.title)
 
         _images_to_pdf(all_image_paths, pdf_path, output_dir)
 
@@ -1158,6 +1177,7 @@ def download_selected_chapters(album_id: str, selected_indices_json: str,
     pdfs = []
     total = len(selected_set)
     done = 0
+    dl_idx = 0  # maps to download directory order, not album index
 
     for i, photo in enumerate(album):
         if i not in selected_set:
@@ -1169,14 +1189,18 @@ def download_selected_chapters(album_id: str, selected_indices_json: str,
         safe_chapter = _sanitize_filename(chapter_title)
         pdf_name = "[JM{}] {:03d}_{}.pdf".format(
             album_id, i + 1, safe_chapter)
-        pdf_path = os.path.join(output_dir, pdf_name)
+        comic_dir = os.path.join(output_dir, album_id)
+        os.makedirs(comic_dir, exist_ok=True)
+        pdf_path = os.path.join(comic_dir, pdf_name)
+        _write_comic_info(comic_dir, album_id, album.title)
 
         _write_progress(output_dir, "pdf", done, total,
                         "合成PDF {}/{}: {}".format(done, total, chapter_title))
 
         try:
             chapter_images = _collect_images_from_photo(
-                photo, download_base, album_id=str(album_id), photo_index=i)
+                photo, download_base, album_id=str(album_id), photo_index=dl_idx)
+            dl_idx += 1
             if not chapter_images:
                 pdfs.append({
                     "chapter_index": i,

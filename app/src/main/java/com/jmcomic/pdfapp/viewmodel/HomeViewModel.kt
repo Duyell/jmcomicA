@@ -79,29 +79,42 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 if (json.optBoolean("success", false)) {
                     val title = json.optString("title", "")
                     val chaptersArr = json.optJSONArray("chapters") ?: JSONArray()
+                    // Check which chapters already exist on disk
+                    val existingIndices = historyManager.getDownloadedChapterIndices(id)
                     val chapters = (0 until chaptersArr.length()).map { i ->
                         val ch = chaptersArr.getJSONObject(i)
                         ChapterInfo(
                             index = ch.getInt("index"),
-                            title = ch.optString("title", "第${ch.getInt("index") + 1}章")
+                            title = ch.optString("title", "第${ch.getInt("index") + 1}章"),
+                            downloaded = ch.getInt("index") in existingIndices
                         )
                     }
 
                     if (chapters.size <= 1) {
-                        // Single chapter — download directly (legacy flow)
-                        _uiState.value = _uiState.value.copy(
-                            albumTitle = title,
-                            chapters = chapters,
-                        )
-                        downloadSingleChapter(id)
+                        // Single chapter — skip if already downloaded
+                        if (chapters.firstOrNull()?.downloaded == true) {
+                            _uiState.value = _uiState.value.copy(
+                                status = DownloadStatus.Error("该章节已下载"),
+                                errorMessage = "该章节已下载",
+                                albumTitle = title,
+                                chapters = chapters,
+                            )
+                        } else {
+                            _uiState.value = _uiState.value.copy(
+                                albumTitle = title,
+                                chapters = chapters,
+                            )
+                            downloadSingleChapter(id)
+                        }
                     } else {
-                        // Multi-chapter — show selection dialog
+                        // Multi-chapter — show dialog, pre-select non-downloaded
+                        val toSelect = chapters.filter { !it.downloaded }.map { it.index }.toSet()
                         _uiState.value = _uiState.value.copy(
                             status = DownloadStatus.Idle,
                             albumTitle = title,
                             chapters = chapters,
                             showChapterDialog = true,
-                            selectedChapters = chapters.map { it.index }.toSet(), // all selected by default
+                            selectedChapters = toSelect,
                             progressMessage = "",
                         )
                     }
@@ -366,15 +379,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /** Only clean the temp downloads dir, not existing PDFs (v1.3 multi-comic). */
     private fun cleanupPdfDir() {
         try {
-            val dir = File(outputDir)
-            if (dir.isDirectory) {
-                dir.listFiles()?.filter { it.extension.equals("pdf", ignoreCase = true) }
-                    ?.forEach { it.delete() }
-                val downloads = File(dir, "downloads")
-                if (downloads.isDirectory) downloads.deleteRecursively()
-            }
+            val downloads = File(outputDir, "downloads")
+            if (downloads.isDirectory) downloads.deleteRecursively()
         } catch (_: Exception) {}
     }
 }

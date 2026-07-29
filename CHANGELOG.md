@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.3 (2026-07-29)
+
+### 新功能
+
+- **多漫画管理**：PDF 按漫画 ID 分目录存储（`pdf_output/{album_id}/`），支持同时存放多部漫画的下载内容
+- **已下载跳过**：再次输入同一漫画 ID 时，章节选择弹窗中已下载的章节显示"已下载"标签并默认取消勾选，避免重复下载
+- **漫画分组视图**：设置页改为漫画卡片式分组，每部漫画可展开/折叠查看章节列表
+- **删除整部漫画**：支持一键删除某部漫画的全部章节
+
+### 修复
+
+- `_collect_images_from_photo`：`photo.title` 为空时按 `photo_index` 序号匹配目录，不再 fallback 到遍历全部目录导致重复合并
+- `cleanupPdfDir`：不再删除所有 PDF，只清理临时下载目录
+- Release 构建禁用 R8（`minifyEnabled false`），避免 Chaquopy 代理类被字节码优化破坏
+
+### 架构变更
+
+- `DownloadHistoryManager`：支持嵌套目录扫描 + 漫画分组 + 检查已下载章节
+- `ChapterInfo` 新增 `downloaded` 字段
+- 新增 `ComicGroup`、`ComicInfo` 数据类
+- `SettingsUiState` 新增 `groups`/`filteredGroups`
+
 ## v1.2 (2026-07-29)
 
 ### 新功能
