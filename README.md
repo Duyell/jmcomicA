@@ -9,7 +9,9 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 - 输入 JM 漫画车号（album ID），自动识别单章节/多章节漫画
 - **单章节漫画**：一键下载，直接生成 PDF
 - **多章节漫画**：弹出章节列表，自由勾选要下载的章节，每章生成独立 PDF——不再合并为单个巨大文件
-- **下载管理**：设置页展示下载历史，支持模糊搜索、打开 PDF、删除记录
+- **多漫画管理**：PDF 按漫画 ID 分目录存储，支持同时存放多部漫画
+- **已下载跳过**：再次搜索已下载的漫画时，已下载章节显示标记并默认跳过
+- **下载管理**：设置页漫画卡片式分组，可展开查看章节、模糊搜索、删除单章或整部
 - 自动处理图片扰码（scrambling），还原正确画面
 - 支持 WebP 格式图片（Android 原生解码）
 - 浅蓝白 Material 3 主题 UI
@@ -99,8 +101,8 @@ gradlew.bat assembleDebug   # Windows
 ```
 
 APK 位于：
-- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.2.apk`
-- Release: `app/build/outputs/apk/release/JMComicPdf-v1.2.apk`
+- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.3.apk`
+- Release: `app/build/outputs/apk/release/JMComicPdf-v1.3.apk`
 
 ## 核心流程
 
