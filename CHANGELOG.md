@@ -4,25 +4,37 @@
 
 ### 新功能
 
-- **底部导航栏**：首页 + 设置两个 Tab，设置页包含下载管理
-- **多章节选择下载**：多章节漫画弹出章节列表，用户可自由勾选要下载的章节，每章生成独立 PDF
-- **下载历史管理**：设置页展示所有已下载的 PDF，支持模糊搜索、打开、删除
-- **真正的按需下载**：只下载用户选中的章节图片，不再下载整本漫画的全部图片
+- **多章节选择下载**：多章节漫画不再自动合并，而是弹出章节列表对话框。用户可自由勾选要下载的章节，每章生成一个独立 PDF。单章节漫画保持原有"一键下载"体验。
+- **底部导航栏**：首页（下载）+ 设置（下载管理）两个 Tab，Material 3 风格。
+- **下载管理**：设置页展示所有已下载的 PDF 历史，每条显示漫画标题、章节名、下载时间和文件大小。
+- **模糊搜索**：设置页顶部搜索框，支持按漫画 ID、标题、章节名模糊匹配。
+- **真正的按需下载**：只下载用户选中章节的图片，不再拉取整本漫画的全部图片。进度条数字准确反映选中章节的图片数量。
 
-### 修复
+### 界面变更
 
-- 多章节漫画不再合并为单个巨大 PDF，每章独立一个 PDF 文件
-- 下载进度条现在正确反映选中章节的图片数量（不再显示全书总页数）
-- 进度消息从误导性的"获取漫画信息…"改为准确的"下载图片中…"和逐章进度
-- jmcomic `get_album_detail` API 调用修复（`hasattr` 被 jmcomic 自定义 `__getattr__` 误判）
-- 选择性下载使用 `option.download_photo(photo_id)` 接口
+- 首页精简为单个漫画 ID 输入框 + 下载按钮。
+- 多章节下载完成后展示逐章结果卡片，每章可独立打开 PDF。
+- 设置页为空时显示引导文案。
+
+### 技术修复
+
+- 修复 `get_album_info()` 中 `hasattr` 被 jmcomic 自定义 `__getattr__` 误判导致 API 调用失败。
+- 选择性下载改用 `option.download_photo(photo_id)` 接口，绕过 downloader factory 不兼容问题。
+- `_collect_images_from_photo()` 增加目录匹配 fallback，解决 `get_album_detail` 返回的 photo 对象 `page_arr` 为 `None` 的崩溃。
+- 进度消息从误导性的"获取漫画信息…"改为准确的"下载图片中…"和"下载 2/5: 第X話"等逐章进度。
 
 ### 架构变更
 
-- `MainScreen.kt` / `MainViewModel.kt` → 拆分为 `HomeScreen` + `SettingsScreen` + 对应 ViewModel
-- 新增 `model/` 包：`ChapterInfo`, `DownloadRecord`, UI state 数据类
-- 新增 `data/DownloadHistoryManager`：JSON 文件持久化下载记录
-- Python 侧新增 `get_album_info()`, `download_selected_chapters()`, 重构公共配置 helper
+- `MainScreen.kt` / `MainViewModel.kt` → 拆分为 `HomeScreen` + `SettingsScreen` + 对应 ViewModel。
+- 新增 `model/` 包：`ChapterInfo`, `DownloadRecord`, `HomeUiState`, `SettingsUiState`。
+- 新增 `data/DownloadHistoryManager`：JSON 文件持久化下载记录。
+- Python 侧新增 `get_album_info()`, `download_selected_chapters()`, `_download_selected_photos()`，重构 `_build_proxy_config()`, `_build_option_text()` 等公共 helper。
+- 版本号：versionCode 2→3, versionName 1.1→1.2。
+
+### 已知限制
+
+- 需要在本机开启代理软件（Clash / v2ray 等）才能访问禁漫站点。
+- 代理端口需为常见端口（7890 / 7897 / 10808 / 10809）。
 
 ## v1.1 (2026-07-24)
 
