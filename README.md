@@ -6,21 +6,26 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 
 ## 功能
 
-- 输入 JM 漫画车号（album ID），一键下载所有章节
+- 输入 JM 漫画车号（album ID），自动识别单章节/多章节漫画
+- **单章节漫画**：一键下载，直接生成 PDF
+- **多章节漫画**：弹出章节列表，自由勾选要下载的章节，每章生成独立 PDF——不再合并为单个巨大文件
+- **下载管理**：设置页展示下载历史，支持模糊搜索、打开 PDF、删除记录
 - 自动处理图片扰码（scrambling），还原正确画面
-- 所有图片合并为单个 PDF 文件
 - 支持 WebP 格式图片（Android 原生解码）
-- 暗色主题 UI（Jetpack Compose + Material 3）
+- 浅蓝白 Material 3 主题 UI
+- 代理自动探测（Clash / v2ray 常见端口），零配置
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | UI | Kotlin + Jetpack Compose + Material 3 |
+| 导航 | Scaffold + NavigationBar（首页 / 设置） |
 | 状态管理 | ViewModel + StateFlow |
+| 数据持久化 | JSON 文件（下载历史记录） |
 | Python 运行时 | [Chaquopy](https://chaquo.com/chaquopy/) 15.0.1 |
-| 爬虫库 | `jmcomic` 2.6.14 |
-| 图片解码 | Android BitmapFactory + Pillow |
+| 爬虫库 | `jmcomic` 2.7.2 |
+| 图片解码 | Android BitmapFactory + Pillow 9.2.0 |
 | PDF 合成 | Pillow |
 | 最低 SDK | Android 8.0 (API 26) |
 | 目标 SDK | Android 14 (API 34) |
@@ -41,13 +46,20 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
         │   └── jm_bridge.py      # Python 桥接：下载 + 解扰 + PDF
         ├── java/com/jmcomic/pdfapp/
         │   ├── JMComicApp.kt     # Application（崩溃日志 + Python 初始化）
-        │   ├── MainActivity.kt   # 入口 Activity + PDF 打开
+        │   ├── MainActivity.kt   # 入口 Activity + 底部导航 + PDF 打开
+        │   ├── model/
+        │   │   └── Models.kt     # 共享数据类（ChapterInfo / DownloadRecord / UI State）
+        │   ├── data/
+        │   │   └── DownloadHistoryManager.kt  # 下载历史 JSON 持久化
         │   ├── ui/
         │   │   ├── theme/        # 颜色 / 字体 / Material 3 主题
         │   │   └── screen/
-        │   │       └── MainScreen.kt    # 主界面
+        │   │       ├── HomeScreen.kt            # 首页（输入 + 下载）
+        │   │       ├── ChapterSelectDialog.kt   # 多章节选择弹窗
+        │   │       └── SettingsScreen.kt        # 设置页（下载管理 + 搜索）
         │   └── viewmodel/
-        │       └── MainViewModel.kt     # 状态管理 + Python 调用
+        │       ├── HomeViewModel.kt     # 首页逻辑（获取信息 → 下载）
+        │       └── SettingsViewModel.kt # 设置页逻辑（历史、搜索、删除）
         ├── AndroidManifest.xml
         └── res/
             ├── xml/file_paths.xml       # FileProvider 路径
@@ -60,7 +72,7 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 
 - **JDK 17+**
 - **Android SDK 34**（platforms;android-34、build-tools;34.0.0）
-- **Python 3.8**（Chaquopy 15.x 要求；3.9-3.11 也可尝试但可能有兼容性问题）
+- **Python 3.11**（Chaquopy 15.0.1 构建用）
 - Android Studio（可选）或仅用命令行
 
 ### 步骤
@@ -73,48 +85,69 @@ cd jmcomicA
 # 2. 创建 local.properties，指向你的 Android SDK
 #    内容：sdk.dir=你的SDK路径
 #    例如 macOS: sdk.dir=/Users/xxx/Library/Android/sdk
-#    例如 Windows: sdk.dir=C\:\\Users\\xxx\\AppData\\Local\\Android\\Sdk
+#    例如 Windows: sdk.dir=D\:\\Tools\\android-sdk
 
 # 3. 修改 app/build.gradle 中的 Python 路径
-#    找到 buildPython 并将其改为你的 Python 3.8 路径
-#    例如 macOS: buildPython '/usr/local/bin/python3.8'
-#    例如 Windows: buildPython 'C:/Python38/python.exe'
+#    找到 buildPython 并将其改为你的 Python 3.11 路径
 
-# 4. 构建 Debug APK（macOS / Linux）
-./gradlew assembleDebug
+# 4. 构建 Debug APK
+./gradlew assembleDebug     # macOS / Linux
+gradlew.bat assembleDebug   # Windows
 
-# Windows
-gradlew.bat assembleDebug
+# 5. 构建 Release APK（需要 keystore.properties）
+./gradlew assembleRelease
 ```
 
-APK 位于：`app/build/outputs/apk/debug/app-debug.apk`
+APK 位于：
+- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.2.apk`
+- Release: `app/build/outputs/apk/release/JMComicPdf-v1.2.apk`
 
 ## 核心流程
 
+### 单章节漫画
+
 ```
-用户输入车号 → MainViewModel.startDownload()
-    ↓ IO 线程
-Python → jm_bridge.download_album_as_pdf(album_id, output_dir)
+用户输入车号 → HomeViewModel.onDownloadTapped()
+    ↓
+Python get_album_info() → 章节数 ≤ 1
+    ↓
+Python get_pdf_path() → download_album_as_pdf()
     ↓
 1. jmcomic API 下载漫画元数据 + 图片（WebP 格式，已扰码）
 2. Android BitmapFactory 解码 WebP
 3. Canvas API 解扰（strip reorder）
-4. 保存为 JPEG
-5. Pillow 合成 PDF
+4. Pillow 合成单个 PDF
     ↓
-ViewModel → Success(pdfPath)
+HomeScreen → 打开 PDF → FileProvider → 系统阅读器
+```
+
+### 多章节漫画
+
+```
+用户输入车号 → HomeViewModel.onDownloadTapped()
     ↓
-MainScreen → 打开 PDF 按钮
+Python get_album_info() → 章节数 > 1
     ↓
-MainActivity.openPdf() → FileProvider → 系统 PDF 阅读器
+ChapterSelectDialog（勾选要下载的章节）
+    ↓ 用户确认
+Python download_selected_chapters()
+    ↓
+1. jmcomic API client 获取专辑详情（78 章）
+2. option.download_photo(photo_id) 只下载选中章节的图片
+3. 解扰 → 逐章合成 PDF
+    ↓
+HomeScreen → 逐章结果卡片（可独立打开每个 PDF）
+    ↓
+下载记录存入 download_history.json → 设置页可查看/搜索/删除
 ```
 
 ## 已知问题 / 注意事项
 
-- **Python 版本**：Chaquopy 15.0.1 在设备上使用 Python 3.8，构建时 `buildPython` 最好也指向 3.8，避免字节码不兼容
+- **Python 版本**：构建用 Python 3.11，设备上运行 Python 3.8（Chaquopy 内置），直接运行 `.py` 源文件避过字节码兼容问题
 - **图片格式**：JM CDN 返回 WebP 图片。Android Pillow 不含 `_webp` 扩展，已使用 Android 原生 `BitmapFactory` 替代
 - **图片扰码**：JM 对图片做水平条带扰码，解扰算法已移植到 Android Canvas API
-- **curl_cffi**：此库包含不兼容 Android 的原生代码，已在 Python 层通过 import hook 屏蔽，自动回退到 `requests`
+- **curl_cffi**：此库包含不兼容 Android 的原生代码，已在 Python 层通过 MetaPathFinder 屏蔽，自动回退到 `requests`
+- **网络**：需要在本机开启代理软件（Clash / v2ray 等），代理端口需为常见端口（7890 / 7897 / 10808 / 10809）
 
 ## License
 
