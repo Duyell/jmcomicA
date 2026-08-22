@@ -14,7 +14,10 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 - **下载管理**：设置页漫画卡片式分组，可展开查看章节、模糊搜索、删除单章或整部
 - 自动处理图片扰码（scrambling），还原正确画面
 - 支持 WebP 格式图片（Android 原生解码）
-- 浅蓝白 Material 3 主题 UI
+- **Material 3 主题**：深色模式（跟随系统 / 浅色 / 深色三态切换）+ Android 12+ 动态取色
+- **漫画封面缩略图**：取第一章第一张图（自动解扰），展示于下载管理与章节选择弹窗
+- 自适应应用图标（保留原图标图案）+ Android 12+ 启动屏
+- 删除整部漫画二次确认，防止误删
 - 代理自动探测（Clash / v2ray 常见端口），零配置
 
 ## 技术栈
@@ -52,20 +55,25 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
         │   ├── model/
         │   │   └── Models.kt     # 共享数据类（ChapterInfo / DownloadRecord / UI State）
         │   ├── data/
-        │   │   └── DownloadHistoryManager.kt  # 下载历史 JSON 持久化
+        │   │   ├── DownloadHistoryManager.kt  # 下载历史 JSON 持久化
+        │   │   └── ThemePrefs.kt              # 主题模式持久化（跟随系统/浅色/深色）
         │   ├── ui/
-        │   │   ├── theme/        # 颜色 / 字体 / Material 3 主题
+        │   │   ├── components/      # GradientButton / CoverImage 公共组件
+        │   │   ├── theme/           # 颜色 / 字体 / Material 3 主题（明暗双主题 + 动态取色）
         │   │   └── screen/
         │   │       ├── HomeScreen.kt            # 首页（输入 + 下载）
         │   │       ├── ChapterSelectDialog.kt   # 多章节选择弹窗
-        │   │       └── SettingsScreen.kt        # 设置页（下载管理 + 搜索）
+        │   │       └── SettingsScreen.kt        # 设置页（下载管理 + 搜索 + 主题切换）
         │   └── viewmodel/
         │       ├── HomeViewModel.kt     # 首页逻辑（获取信息 → 下载）
         │       └── SettingsViewModel.kt # 设置页逻辑（历史、搜索、删除）
         ├── AndroidManifest.xml
         └── res/
-            ├── xml/file_paths.xml       # FileProvider 路径
-            └── values/themes.xml        # 原生主题
+            ├── drawable-nodpi/       # 自适应图标前景位图
+            ├── mipmap-anydpi-v26/    # 自适应图标（保留原图标图案）
+            ├── values-v31/           # Android 12+ 启动屏主题
+            ├── xml/file_paths.xml    # FileProvider 路径
+            └── values/themes.xml     # 原生主题
 ```
 
 ## 构建
@@ -101,8 +109,10 @@ gradlew.bat assembleDebug   # Windows
 ```
 
 APK 位于：
-- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.3.apk`
-- Release: `app/build/outputs/apk/release/JMComicPdf-v1.3.apk`
+- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.3.1.apk`
+- Release: `app/build/outputs/apk/release/JMComicPdf-v1.3.1.apk`
+
+> 注意：debug 版与 release 版签名不同，从 debug 切换到 release 需先卸载旧版（会清空应用数据），release 之间的升级可直接覆盖安装。
 
 ## 核心流程
 
@@ -142,6 +152,8 @@ HomeScreen → 逐章结果卡片（可独立打开每个 PDF）
     ↓
 下载记录存入 download_history.json → 设置页可查看/搜索/删除
 ```
+
+> 封面缓存：`get_album_info()` 会同时下载第一章第一张图并解扰，缓存到 `filesDir/covers/` 作为漫画缩略图；失败时 UI 显示渐变占位图。
 
 ## 已知问题 / 注意事项
 
