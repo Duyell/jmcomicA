@@ -134,13 +134,6 @@ def _write_comic_info(comic_dir, album_id, title):
             json.dump({"album_id": str(album_id), "title": title}, f, ensure_ascii=False)
     except Exception:
         pass
-    """Append a debug line to debug.log (readable via adb run-as)."""
-    try:
-        path = os.path.join(output_dir, "debug.log")
-        with open(path, 'a') as f:
-            f.write(msg + '\n')
-    except Exception:
-        pass
 
 
 def _detect_emulator_proxy():
@@ -917,12 +910,137 @@ def _get_jm_client(option):
     )
 
 
-def get_album_info(album_id: str, proxy_url: str = "") -> str:
+def _unscramble_cover(filepath: str, num: int, out_jpg_path: str) -> bool:
+    """
+    Unscramble a single cover image via Android Bitmap + Canvas,
+    save as JPEG. Mirrors _unscramble_via_android's strip-reorder logic.
+    Returns True on success.
+    """
+    try:
+        from android.graphics import BitmapFactory, Bitmap, Canvas, Paint, Rect
+        from java.io import FileOutputStream
+
+        bitmap = BitmapFactory.decodeFile(filepath)
+        if bitmap is None:
+            return False
+
+        w = bitmap.getWidth()
+        h = bitmap.getHeight()
+        if num <= 1:
+            out = bitmap
+        else:
+            out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            canvas = Canvas(out)
+            paint = Paint()
+            over = h % num
+            for i in range(num):
+                move = int(h / num)
+                y_src = h - (move * (i + 1)) - over
+                y_dst = move * i
+                if i == 0:
+                    move += over
+                else:
+                    y_dst += over
+                src_rect = Rect(0, y_src, w, y_src + move)
+                dst_rect = Rect(0, y_dst, w, y_dst + move)
+                canvas.drawBitmap(bitmap, src_rect, dst_rect, paint)
+            bitmap.recycle()
+
+        stream = FileOutputStream(out_jpg_path)
+        try:
+            out.compress(Bitmap.CompressFormat.JPEG, 90, stream)
+        finally:
+            stream.close()
+            if out is not bitmap:
+                out.recycle()
+            elif num <= 1:
+                bitmap.recycle()
+        return True
+    except Exception as e:
+        print("JM_COVER: unscramble failed: {}".format(repr(e)), file=sys.stderr)
+        return False
+
+
+def _fetch_album_cover(client, album, proxy: str, covers_dir: str) -> str:
+    """
+    Fetch the first image of the first chapter as the cover, unscramble it,
+    and cache it to covers_dir/{album_id}.jpg.
+
+    Returns the saved file path, or '' on any failure (callers degrade
+    gracefully to a placeholder).
+    """
+    if not covers_dir:
+        return ''
+    album_id = str(getattr(album, 'album_id', ''))
+    try:
+        episode_list = getattr(album, 'episode_list', None) or []
+        if not episode_list:
+            return ''
+        first_photo_id = episode_list[0][0]
+
+        # 第一章详情：page_arr / data_original_domain / scramble_id
+        photo = client.get_photo_detail(first_photo_id, fetch_album=False)
+
+        # data_original_0 是第一张图标签的完整 URL（自带 ?v= 参数，
+        # 没有该参数 CDN 会返回空数据）；缺失时退回遍历拼接的 URL。
+        img_url = getattr(photo, 'data_original_0', None) \
+            or getattr(next(iter(photo), None), 'img_url', '') \
+            or ''
+        if not img_url:
+            return ''
+
+        import requests
+        headers = {
+            'User-Agent': ('Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 '
+                           '(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36'),
+            'Referer': 'https://' + (_host_of(img_url) or '18comic.org'),
+        }
+        proxies = {'http': proxy, 'https': proxy} if proxy else None
+        r = requests.get(img_url, headers=headers, proxies=proxies, timeout=25)
+        if r.status_code != 200 or not r.content:
+            return ''
+        # 校验确实是图片（部分 CDN 可能返回 HTML 拦截页）
+        if not (r.content.startswith(b'\xff\xd8')          # JPEG
+                or r.content.startswith(b'\x89PNG')        # PNG
+                or r.content.startswith(b'RIFF')):         # WebP
+            print("JM_COVER: not an image ({!r}): {}".format(
+                r.content[:16], img_url), file=sys.stderr)
+            return ''
+
+        os.makedirs(covers_dir, exist_ok=True)
+        tmp_path = os.path.join(covers_dir, '{}.tmp'.format(album_id))
+        with open(tmp_path, 'wb') as f:
+            f.write(r.content)
+
+        # 解扰（复用下载主流程同一套算法）
+        from jmcomic.jm_toolkit import JmImageTool
+        num = JmImageTool.get_num_by_url(getattr(photo, 'scramble_id', ''), img_url)
+
+        out_path = os.path.join(covers_dir, '{}.jpg'.format(album_id))
+        if not _unscramble_cover(tmp_path, num, out_path):
+            return ''
+
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+        print("JM_COVER: saved {} (chapter1 page1, num={})".format(out_path, num),
+              file=sys.stderr)
+        return out_path
+    except Exception as e:
+        print("JM_COVER: fetch failed for {}: {}".format(album_id, repr(e)),
+              file=sys.stderr)
+        return ''
+
+
+def get_album_info(album_id: str, proxy_url: str = "", covers_dir: str = "") -> str:
     """
     Fetch album metadata (title + chapter list) WITHOUT downloading images.
 
     Returns JSON:
-      {"success": true, "title": "...", "chapters": [{"index":0,"title":"..."}, ...]}
+      {"success": true, "title": "...",
+       "chapters": [{"index":0,"title":"..."}, ...],
+       "cover_path": "/path/to/cover.jpg"}   (cover_path may be '')
       {"success": false, "error": "...", "user_message": "..."}
     """
     try:
@@ -955,10 +1073,13 @@ def get_album_info(album_id: str, proxy_url: str = "") -> str:
             title = (getattr(photo, 'title', None) or '第{}章'.format(i + 1)).strip()
             chapters.append({"index": i, "title": title})
 
+        cover_path = _fetch_album_cover(client, album, proxy, covers_dir)
+
         return json.dumps({
             "success": True,
             "title": album.title or '',
             "chapters": chapters,
+            "cover_path": cover_path or '',
         }, ensure_ascii=False)
     finally:
         _cleanup_dir(tmp_dir)

@@ -8,6 +8,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,14 +29,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.BrightnessAuto
+import androidx.compose.material.icons.rounded.CollectionsBookmark
+import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
-import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -44,11 +48,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
@@ -59,26 +68,28 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jmcomic.pdfapp.model.ComicGroup
 import com.jmcomic.pdfapp.model.DownloadRecord
-import com.jmcomic.pdfapp.ui.theme.AccentBlue
-import com.jmcomic.pdfapp.ui.theme.ErrorRed
-import com.jmcomic.pdfapp.ui.theme.SuccessGreen
-import com.jmcomic.pdfapp.ui.theme.SurfaceContainer
-import com.jmcomic.pdfapp.ui.theme.SurfaceDark
-import com.jmcomic.pdfapp.ui.theme.TextPrimary
-import com.jmcomic.pdfapp.ui.theme.TextSecondary
+import com.jmcomic.pdfapp.ui.components.CoverImage
+import com.jmcomic.pdfapp.ui.theme.AppTheme
+import com.jmcomic.pdfapp.ui.theme.ThemeMode
 import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
 
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
-    onOpenPdf: (String) -> Unit = {}
+    onOpenPdf: (String) -> Unit = {},
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    onCycleTheme: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val isSearchVisible by viewModel.isSearchVisible.collectAsStateWithLifecycle()
+    val scheme = MaterialTheme.colorScheme
+
+    // 待确认删除的漫画（先弹二次确认框）
+    var pendingDelete by remember { mutableStateOf<ComicGroup?>(null) }
 
     Column(
         modifier = Modifier.fillMaxSize()
-            .background(SurfaceDark)
+            .background(scheme.background)
     ) {
         // ── Top bar ──
         Row(
@@ -89,16 +100,28 @@ fun SettingsScreen(
             Text(
                 "下载管理",
                 style = MaterialTheme.typography.headlineMedium,
-                color = TextPrimary,
+                color = scheme.onBackground,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
+            // 主题模式切换：跟随系统 → 浅色 → 深色
+            IconButton(onClick = onCycleTheme) {
+                Icon(
+                    when (themeMode) {
+                        ThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
+                        ThemeMode.LIGHT -> Icons.Rounded.LightMode
+                        ThemeMode.DARK -> Icons.Rounded.DarkMode
+                    },
+                    contentDescription = "切换主题",
+                    tint = scheme.onSurfaceVariant
+                )
+            }
             IconButton(onClick = { viewModel.toggleSearch() }) {
                 Icon(
                     if (isSearchVisible) Icons.Rounded.SearchOff
                     else Icons.Rounded.Search,
                     contentDescription = "搜索",
-                    tint = if (isSearchVisible) AccentBlue else TextSecondary
+                    tint = if (isSearchVisible) scheme.primary else scheme.onSurfaceVariant
                 )
             }
         }
@@ -119,18 +142,18 @@ fun SettingsScreen(
                     .padding(horizontal = 20.dp, vertical = 8.dp),
                 leadingIcon = {
                     Icon(Icons.Rounded.Search, contentDescription = null,
-                        tint = TextSecondary, modifier = Modifier.size(20.dp))
+                        tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary,
-                    cursorColor = AccentBlue,
-                    focusedBorderColor = AccentBlue,
-                    unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f),
-                    focusedContainerColor = SurfaceContainer.copy(alpha = 0.3f),
-                    unfocusedContainerColor = SurfaceContainer.copy(alpha = 0.3f),
+                    focusedTextColor = scheme.onSurface,
+                    unfocusedTextColor = scheme.onSurface,
+                    cursorColor = scheme.primary,
+                    focusedBorderColor = scheme.primary,
+                    unfocusedBorderColor = scheme.outlineVariant,
+                    focusedContainerColor = scheme.surfaceContainerLow,
+                    unfocusedContainerColor = scheme.surfaceContainerLow,
                 ),
                 shape = RoundedCornerShape(12.dp)
             )
@@ -142,7 +165,7 @@ fun SettingsScreen(
             if (uiState.searchQuery.isNotBlank())
                 "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章"
             else "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章",
-            color = TextSecondary.copy(alpha = 0.6f),
+            color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
             style = MaterialTheme.typography.labelSmall,
             letterSpacing = 1.sp,
             modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 4.dp)
@@ -155,13 +178,13 @@ fun SettingsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Rounded.Settings, contentDescription = null,
-                        tint = TextSecondary.copy(alpha = 0.3f), modifier = Modifier.size(64.dp))
+                    Icon(Icons.Rounded.CollectionsBookmark, contentDescription = null,
+                        tint = scheme.onSurfaceVariant.copy(alpha = 0.3f), modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
                     Text(
                         if (uiState.searchQuery.isNotBlank()) "未找到匹配的下载记录"
                         else "暂无下载记录",
-                        color = TextSecondary.copy(alpha = 0.5f),
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.5f),
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
@@ -182,12 +205,42 @@ fun SettingsScreen(
                         onToggle = { viewModel.toggleGroup(group.albumId) },
                         onOpenPdf = onOpenPdf,
                         onDeleteChapter = viewModel::deleteChapter,
-                        onDeleteComic = { viewModel.deleteComic(group.albumId) },
+                        onDeleteComic = { pendingDelete = group },
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                 }
                 item { Spacer(Modifier.height(80.dp)) }
             }
+        }
+
+        // ── 删除整部漫画二次确认 ──
+        pendingDelete?.let { group ->
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                containerColor = scheme.surface,
+                titleContentColor = scheme.onSurface,
+                textContentColor = scheme.onSurfaceVariant,
+                title = { Text("删除整部漫画？") },
+                text = {
+                    Text(
+                        "将删除《${group.albumTitle.ifBlank { "JM${group.albumId}" }}》" +
+                            "的全部 ${group.chapters.size} 章 PDF，且无法恢复。"
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.deleteComic(group.albumId)
+                        pendingDelete = null
+                    }) {
+                        Text("删除", color = scheme.error, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDelete = null }) {
+                        Text("取消", color = scheme.onSurfaceVariant)
+                    }
+                },
+            )
         }
     }
 }
@@ -202,50 +255,71 @@ private fun ComicGroupCard(
     onDeleteChapter: (String) -> Unit,
     onDeleteComic: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val cardShape = RoundedCornerShape(18.dp)
     Column(
         modifier = Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(SurfaceContainer)
+            .shadow(
+                elevation = 5.dp,
+                shape = cardShape,
+                spotColor = Color.Black.copy(alpha = 0.07f),
+                ambientColor = Color.Black.copy(alpha = 0.07f),
+            )
+            .clip(cardShape)
+            .background(scheme.surface)
+            .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
     ) {
         // ── Comic header (always visible) ──
         Row(
             modifier = Modifier.fillMaxWidth()
                 .clickable(onClick = onToggle)
-                .padding(16.dp),
+                .padding(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp))
-                    .background(AccentBlue.copy(alpha = 0.10f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Description, contentDescription = null,
-                    tint = AccentBlue, modifier = Modifier.size(22.dp))
-            }
+            // 封面缩略图（缺失时渐变占位）
+            CoverImage(
+                albumId = group.albumId,
+                title = group.albumTitle,
+                modifier = Modifier.size(width = 50.dp, height = 68.dp),
+                shape = RoundedCornerShape(10.dp),
+            )
             Spacer(Modifier.width(14.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = group.albumTitle.ifBlank { "JM${group.albumId}" },
-                    color = TextPrimary,
+                    color = scheme.onSurface,
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    "JM${group.albumId} · ${group.chapters.size} 章",
-                    color = TextSecondary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "JM${group.albumId}",
+                        color = scheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${group.chapters.size} 章",
+                        color = scheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(scheme.primary.copy(alpha = 0.10f))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
             }
             IconButton(onClick = onDeleteComic) {
                 Icon(Icons.Rounded.DeleteForever, contentDescription = "删除全部",
-                    tint = ErrorRed.copy(alpha = 0.5f), modifier = Modifier.size(20.dp))
+                    tint = scheme.error.copy(alpha = 0.55f), modifier = Modifier.size(20.dp))
             }
             Icon(
                 if (group.expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
                 contentDescription = null,
-                tint = TextSecondary,
+                tint = scheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -279,34 +353,36 @@ private fun ChapterRow(
     onOpen: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val success = AppTheme.colors.success
     Row(
         modifier = Modifier.fillMaxWidth()
             .padding(start = 16.dp, end = 8.dp, bottom = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(AccentBlue.copy(alpha = 0.03f))
+            .clip(RoundedCornerShape(12.dp))
+            .background(scheme.surfaceContainerLow)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = record.chapterTitle,
-                color = TextPrimary,
+                color = scheme.onSurface,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(formatTime(record.downloadTime),
-                    color = TextSecondary.copy(alpha = 0.5f),
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall)
                 Text(formatSize(record.fileSize),
-                    color = TextSecondary.copy(alpha = 0.5f),
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall)
             }
         }
         Button(
             onClick = onOpen,
             shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = SuccessGreen),
+            colors = ButtonDefaults.buttonColors(containerColor = success),
             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
         ) {
             Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null,
@@ -316,7 +392,7 @@ private fun ChapterRow(
         }
         IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
             Icon(Icons.Rounded.DeleteOutline, contentDescription = "删除",
-                tint = ErrorRed.copy(alpha = 0.5f), modifier = Modifier.size(18.dp))
+                tint = scheme.error.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
         }
     }
 }

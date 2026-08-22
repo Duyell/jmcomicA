@@ -7,4 +7,8 @@
         <item name="android:windowTranslucentStatus">false</item>
         <item name="android:windowTranslucentNavigation">false</item>
     </style>
+
+    <!-- 启动主题（Android 12+ 的 splash 属性在 values-v31 中定义，
+         此为基础回退版本，供 API < 31 设备使用） -->
+    <style name="Theme.JMComicPDF.Starting" parent="Theme.JMComicPDF" />
 </resources>

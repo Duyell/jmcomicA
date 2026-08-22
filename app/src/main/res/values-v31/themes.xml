@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+ 启动屏：浅蓝背景 + 品牌蓝文档图标 -->
+    <style name="Theme.JMComicPDF.Starting" parent="Theme.JMComicPDF">
+        <item name="android:windowSplashScreenBackground">#F3F6FB</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+    </style>
+</resources>

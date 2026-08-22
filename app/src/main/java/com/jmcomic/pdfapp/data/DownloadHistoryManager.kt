@@ -69,9 +69,15 @@ class DownloadHistoryManager(private val filesDir: File) {
     fun removeComic(albumId: String) {
         val dir = File(pdfDir, albumId)
         if (dir.isDirectory) dir.deleteRecursively()
+        deleteCover(albumId)
         val records = loadAll().toMutableList()
         records.removeAll { it.albumId == albumId }
         saveAll(records)
+    }
+
+    /** Remove a cached cover image if present. */
+    fun deleteCover(albumId: String) {
+        try { File(File(filesDir, "covers"), "$albumId.jpg").delete() } catch (_: Exception) {}
     }
 
     // ── Comic grouping ────────────────────────────────────────

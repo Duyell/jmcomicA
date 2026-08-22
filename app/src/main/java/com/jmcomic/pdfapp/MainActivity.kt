@@ -6,6 +6,9 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -23,6 +26,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -32,14 +37,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jmcomic.pdfapp.data.ThemePrefs
 import com.jmcomic.pdfapp.ui.screen.HomeScreen
 import com.jmcomic.pdfapp.ui.screen.SettingsScreen
 import com.jmcomic.pdfapp.ui.theme.JMComicPDFTheme
-import com.jmcomic.pdfapp.ui.theme.AccentBlue
-import com.jmcomic.pdfapp.ui.theme.SurfaceContainer
-import com.jmcomic.pdfapp.ui.theme.SurfaceDark
-import com.jmcomic.pdfapp.ui.theme.TextPrimary
-import com.jmcomic.pdfapp.ui.theme.TextSecondary
+import com.jmcomic.pdfapp.ui.theme.ThemeMode
 import com.jmcomic.pdfapp.viewmodel.HomeViewModel
 import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
 import java.io.File
@@ -59,12 +61,20 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            JMComicPDFTheme {
+            var themeMode by remember { mutableStateOf(ThemePrefs.load(this)) }
+            val cycleTheme = {
+                themeMode = ThemePrefs.next(themeMode)
+                ThemePrefs.save(this, themeMode)
+            }
+
+            JMComicPDFTheme(themeMode = themeMode) {
                 val homeViewModel: HomeViewModel = viewModel()
                 val settingsViewModel: SettingsViewModel = viewModel()
                 MainShell(
                     homeViewModel = homeViewModel,
                     settingsViewModel = settingsViewModel,
+                    themeMode = themeMode,
+                    onCycleTheme = cycleTheme,
                     onOpenPdf = { filePath -> openPdf(filePath) },
                     onTabChanged = { tab ->
                         // Refresh history when switching to settings tab
@@ -120,17 +130,20 @@ private val TABS = listOf(
 private fun MainShell(
     homeViewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel,
+    themeMode: ThemeMode,
+    onCycleTheme: () -> Unit,
     onOpenPdf: (String) -> Unit,
     onTabChanged: (Int) -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = SurfaceDark,
+        containerColor = scheme.background,
         bottomBar = {
             NavigationBar(
-                containerColor = SurfaceContainer,
+                containerColor = scheme.surface,
                 tonalElevation = 0.dp,
             ) {
                 TABS.forEachIndexed { index, tab ->
@@ -157,29 +170,37 @@ private fun MainShell(
                             )
                         },
                         colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AccentBlue,
-                            selectedTextColor = AccentBlue,
-                            unselectedIconColor = TextSecondary,
-                            unselectedTextColor = TextSecondary,
-                            indicatorColor = AccentBlue.copy(alpha = 0.08f),
+                            selectedIconColor = scheme.primary,
+                            selectedTextColor = scheme.primary,
+                            unselectedIconColor = scheme.onSurfaceVariant,
+                            unselectedTextColor = scheme.onSurfaceVariant,
+                            indicatorColor = scheme.primary.copy(alpha = 0.10f),
                         ),
                     )
                 }
             }
         }
     ) { innerPadding ->
-        androidx.compose.foundation.layout.Box(
+        Box(
             modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
         ) {
-            when (selectedTab) {
-                0 -> HomeScreen(
-                    viewModel = homeViewModel,
-                    onOpenPdf = onOpenPdf,
-                )
-                1 -> SettingsScreen(
-                    viewModel = settingsViewModel,
-                    onOpenPdf = onOpenPdf,
-                )
+            Crossfade(
+                targetState = selectedTab,
+                animationSpec = tween(durationMillis = 250),
+                label = "tab-crossfade"
+            ) { tab ->
+                when (tab) {
+                    0 -> HomeScreen(
+                        viewModel = homeViewModel,
+                        onOpenPdf = onOpenPdf,
+                    )
+                    1 -> SettingsScreen(
+                        viewModel = settingsViewModel,
+                        onOpenPdf = onOpenPdf,
+                        themeMode = themeMode,
+                        onCycleTheme = onCycleTheme,
+                    )
+                }
             }
         }
     }

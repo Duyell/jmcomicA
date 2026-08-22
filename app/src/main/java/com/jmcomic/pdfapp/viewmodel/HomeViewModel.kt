@@ -44,6 +44,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             if (!it.exists()) it.mkdirs()
         }.absolutePath
 
+    /** 封面缓存目录（Python 下载封面后存放于此，UI 直接读磁盘）。 */
+    val coversDir: String
+        get() = File(getApplication<Application>().filesDir, "covers").also {
+            if (!it.exists()) it.mkdirs()
+        }.absolutePath
+
     // ── Input ────────────────────────────────────────────────
 
     fun onAlbumIdChanged(newId: String) {
@@ -73,7 +79,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val jsonStr = callPython("get_album_info", id, "")
+                val jsonStr = callPython("get_album_info", id, "", coversDir)
                 val json = JSONObject(jsonStr)
 
                 if (json.optBoolean("success", false)) {

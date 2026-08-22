@@ -1,6 +1,7 @@
 package com.jmcomic.pdfapp.ui.screen
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,26 +34,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.jmcomic.pdfapp.model.ChapterInfo
-import com.jmcomic.pdfapp.ui.theme.AccentBlue
-import com.jmcomic.pdfapp.ui.theme.AccentBlueDim
-import com.jmcomic.pdfapp.ui.theme.SuccessGreen
-import com.jmcomic.pdfapp.ui.theme.SurfaceContainer
-import com.jmcomic.pdfapp.ui.theme.SurfaceDark
-import com.jmcomic.pdfapp.ui.theme.TextPrimary
-import com.jmcomic.pdfapp.ui.theme.TextSecondary
+import com.jmcomic.pdfapp.ui.components.CoverImage
+import com.jmcomic.pdfapp.ui.components.GradientButton
+import com.jmcomic.pdfapp.ui.theme.AppTheme
 
 @Composable
 fun ChapterSelectDialog(
+    albumId: String,
     albumTitle: String,
     chapters: List<ChapterInfo>,
     selectedChapters: Set<Int>,
@@ -62,13 +58,16 @@ fun ChapterSelectDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val scheme = MaterialTheme.colorScheme
+    val success = AppTheme.colors.success
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Column(
             modifier = Modifier.fillMaxSize()
-                .background(SurfaceDark)
+                .background(scheme.background)
                 .padding(top = 32.dp)
         ) {
             // ── Top bar ──
@@ -81,23 +80,31 @@ fun ChapterSelectDialog(
                     Icon(
                         Icons.Rounded.Close,
                         contentDescription = "关闭",
-                        tint = TextPrimary,
+                        tint = scheme.onBackground,
                         modifier = Modifier.size(24.dp)
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(4.dp))
+                // 封面缩略图
+                CoverImage(
+                    albumId = albumId,
+                    title = albumTitle,
+                    modifier = Modifier.size(width = 40.dp, height = 54.dp),
+                    shape = RoundedCornerShape(8.dp),
+                )
+                Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "选择章节",
                         style = MaterialTheme.typography.titleLarge,
-                        color = TextPrimary,
+                        color = scheme.onBackground,
                         fontWeight = FontWeight.Bold
                     )
                     if (albumTitle.isNotBlank()) {
                         Text(
                             albumTitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = TextSecondary,
+                            color = scheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -114,32 +121,32 @@ fun ChapterSelectDialog(
                 Button(
                     onClick = onSelectAll,
                     shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AccentBlue.copy(alpha = 0.12f)),
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.primary.copy(alpha = 0.12f)),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Icon(
                         Icons.Rounded.SelectAll,
                         contentDescription = null,
-                        tint = AccentBlue,
+                        tint = scheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("全选", color = AccentBlue, style = MaterialTheme.typography.labelLarge)
+                    Text("全选", color = scheme.primary, style = MaterialTheme.typography.labelLarge)
                 }
                 Button(
                     onClick = onDeselectAll,
                     shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = TextSecondary.copy(alpha = 0.1f)),
+                    colors = ButtonDefaults.buttonColors(containerColor = scheme.onSurfaceVariant.copy(alpha = 0.1f)),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Icon(
                         Icons.Rounded.Deselect,
                         contentDescription = null,
-                        tint = TextSecondary,
+                        tint = scheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text("取消全选", color = TextSecondary, style = MaterialTheme.typography.labelLarge)
+                    Text("取消全选", color = scheme.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
                 }
             }
 
@@ -147,7 +154,7 @@ fun ChapterSelectDialog(
             Text(
                 "已选 ${selectedChapters.size}/${chapters.size} 章" +
                     if (downloadedCount > 0) "  ·  已下载 $downloadedCount 章" else "",
-                color = TextSecondary,
+                color = scheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
             )
@@ -165,7 +172,7 @@ fun ChapterSelectDialog(
                             .padding(vertical = 2.dp, horizontal = 4.dp)
                             .clip(RoundedCornerShape(12.dp))
                             .background(
-                                if (isSelected) AccentBlue.copy(alpha = 0.06f)
+                                if (isSelected) scheme.primary.copy(alpha = 0.08f)
                                 else Color.Transparent
                             )
                             .clickable { onToggle(chapter.index) }
@@ -176,13 +183,13 @@ fun ChapterSelectDialog(
                             if (isSelected) Icons.Rounded.CheckBox
                             else Icons.Rounded.CheckBoxOutlineBlank,
                             contentDescription = null,
-                            tint = if (isSelected) AccentBlue else TextSecondary.copy(alpha = 0.4f),
+                            tint = if (isSelected) scheme.primary else scheme.onSurfaceVariant.copy(alpha = 0.4f),
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(Modifier.width(14.dp))
                         Text(
                             text = chapter.title,
-                            color = if (isSelected) TextPrimary else TextSecondary,
+                            color = if (isSelected) scheme.onBackground else scheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -192,9 +199,14 @@ fun ChapterSelectDialog(
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 "已下载",
-                                color = SuccessGreen,
+                                color = success,
                                 style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(20.dp))
+                                    .background(success.copy(alpha = 0.12f))
+                                    .border(1.dp, success.copy(alpha = 0.35f), RoundedCornerShape(20.dp))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
                     }
@@ -204,33 +216,16 @@ fun ChapterSelectDialog(
             // ── Bottom confirm button ──
             Box(
                 modifier = Modifier.fillMaxWidth()
-                    .background(SurfaceDark)
+                    .background(scheme.background)
                     .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
-                Button(
+                GradientButton(
+                    text = "下载已选章节 (${selectedChapters.size})",
                     onClick = onConfirm,
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                    contentPadding = PaddingValues(0.dp),
-                    enabled = selectedChapters.isNotEmpty()
-                ) {
-                    Box(
-                        Modifier.fillMaxSize().background(
-                            Brush.horizontalGradient(listOf(AccentBlue, AccentBlueDim)),
-                            RoundedCornerShape(14.dp)
-                        ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            "下载已选章节 (${selectedChapters.size})",
-                            color = Color.White,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedChapters.isNotEmpty(),
+                    height = 52.dp,
+                )
             }
         }
     }
