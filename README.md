@@ -161,8 +161,7 @@ HomeScreen → 逐章结果卡片（可独立打开每个 PDF）
 - **图片格式**：JM CDN 返回 WebP 图片。Android Pillow 不含 `_webp` 扩展，已使用 Android 原生 `BitmapFactory` 替代
 - **图片扰码**：JM 对图片做水平条带扰码，解扰算法已移植到 Android Canvas API
 - **curl_cffi**：此库包含不兼容 Android 的原生代码，已在 Python 层通过 MetaPathFinder 屏蔽，自动回退到 `requests`
-- **网络**：需要在本机开启代理软件（Clash / v2ray 等），代理端口需为常见端口（7890 / 7897 / 10808 / 10809）
-
+- 
 ## License
 
 MIT
