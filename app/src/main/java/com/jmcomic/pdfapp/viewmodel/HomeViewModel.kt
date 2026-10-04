@@ -1,11 +1,14 @@
 package com.jmcomic.pdfapp.viewmodel
 
 import android.app.Application
+import android.content.ClipboardManager
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.chaquo.python.Python
 import com.jmcomic.pdfapp.data.DownloadHistoryManager
+import com.jmcomic.pdfapp.data.RecentIdsPrefs
+import com.jmcomic.pdfapp.model.AlbumInfo
 import com.jmcomic.pdfapp.model.ChapterInfo
 import com.jmcomic.pdfapp.model.ChapterDownloadResult
 import com.jmcomic.pdfapp.model.DownloadRecord
@@ -30,11 +33,33 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val TAG = "JMComicPDF"
+
+        /** URL → ID：任意域名的 /album/{id}、/photo/{id} 或 ?id={id}，大小写不敏感。 */
+        private val URL_ID_REGEX = Regex("""(?i)(?:/(?:album|photo)/(\d+)|[?&]id=(\d+))""")
+
+        /** 解析兜底：任意连续数字（【JM350234】等分享格式）。 */
+        private val ANY_DIGITS_REGEX = Regex("""\d+""")
+    }
+
+    /**
+     * 实时规整：URL → 纯数字；其余原样返回。
+     * 注意：实时规整只认 /album/、/photo/、?id= 片段，不做 \d+ 兜底，
+     * 否则手动输入 URL 时域名里的 "18" 会被截断、URL 永远打不完。
+     */
+    private fun normalizeAlbumId(raw: String): String {
+        val t = raw.trim()
+        URL_ID_REGEX.find(t)?.let { m ->
+            val id = m.groupValues[1].ifEmpty { m.groupValues[2] }
+            if (id.isNotEmpty()) return id
+        }
+        return t
     }
 
     private val historyManager = DownloadHistoryManager(application.filesDir)
 
-    private val _uiState = MutableStateFlow(HomeUiState())
+    private val _uiState = MutableStateFlow(
+        HomeUiState(recentIds = RecentIdsPrefs.load(application))
+    )
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
 
     private var pollJob: Job? = null
@@ -52,29 +77,50 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Input ────────────────────────────────────────────────
 
-    fun onAlbumIdChanged(newId: String) {
-        _uiState.value = _uiState.value.copy(albumId = newId)
+    fun onAlbumIdChanged(raw: String) {
+        val normalized = normalizeAlbumId(raw)
+        val prev = _uiState.value
+        // 输入与已解析 ID 不一致 → 失效信息卡片，回到解析前
+        val invalidated = prev.resolvedAlbum != null && normalized != prev.resolvedAlbum.albumId
+        _uiState.value = prev.copy(
+            albumId = normalized,
+            resolvedAlbum = if (invalidated) null else prev.resolvedAlbum,
+            chapters = if (invalidated) emptyList() else prev.chapters,
+            showChapterDialog = if (invalidated) false else prev.showChapterDialog,
+            selectedChapters = if (invalidated) emptySet() else prev.selectedChapters,
+            chapterResults = if (invalidated) emptyList() else prev.chapterResults,
+            pdfPath = if (invalidated) null else prev.pdfPath,
+            errorMessage = if (invalidated) null else prev.errorMessage,
+            status = if (invalidated && prev.status is DownloadStatus.Error) DownloadStatus.Idle else prev.status,
+        )
     }
 
-    // ── Main action: fetch info → decide single / multi chapter ──
+    // ── Step 1: resolve album info ───────────────────────────
 
-    fun onDownloadTapped() {
-        val id = _uiState.value.albumId.trim()
+    fun onResolveTapped() {
+        val state = _uiState.value
+        // 解析时兜底 \d+：支持【JM350234】等分享格式
+        val id = ANY_DIGITS_REGEX.find(state.albumId)?.value ?: state.albumId.trim()
         if (id.isEmpty()) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.value = state.copy(
                 status = DownloadStatus.Error("请输入漫画ID"),
                 errorMessage = "请输入漫画ID"
             )
             return
         }
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.value = state.copy(
+            albumId = id,
             status = DownloadStatus.FetchingInfo,
             progressMessage = "获取漫画信息...",
             progressFraction = null,
             errorMessage = null,
+            resolvedAlbum = null,
             chapters = emptyList(),
             chapterResults = emptyList(),
+            pdfPath = null,
+            showChapterDialog = false,
+            selectedChapters = emptySet(),
         )
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -96,34 +142,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
 
-                    if (chapters.size <= 1) {
-                        // Single chapter — skip if already downloaded
-                        if (chapters.firstOrNull()?.downloaded == true) {
-                            _uiState.value = _uiState.value.copy(
-                                status = DownloadStatus.Error("该章节已下载"),
-                                errorMessage = "该章节已下载",
-                                albumTitle = title,
-                                chapters = chapters,
-                            )
-                        } else {
-                            _uiState.value = _uiState.value.copy(
-                                albumTitle = title,
-                                chapters = chapters,
-                            )
-                            downloadSingleChapter(id)
-                        }
-                    } else {
-                        // Multi-chapter — show dialog, pre-select non-downloaded
-                        val toSelect = chapters.filter { !it.downloaded }.map { it.index }.toSet()
-                        _uiState.value = _uiState.value.copy(
-                            status = DownloadStatus.Idle,
-                            albumTitle = title,
-                            chapters = chapters,
-                            showChapterDialog = true,
-                            selectedChapters = toSelect,
-                            progressMessage = "",
-                        )
-                    }
+                    // 解析成功才写入历史
+                    RecentIdsPrefs.add(getApplication(), id)
+
+                    _uiState.value = _uiState.value.copy(
+                        status = DownloadStatus.Idle,
+                        resolvedAlbum = AlbumInfo(
+                            albumId = id,
+                            title = title,
+                            author = json.optString("author", ""),
+                            tags = parseStringArray(json.optJSONArray("tags")),
+                            pageCount = json.optInt("page_count", 0),
+                        ),
+                        chapters = chapters,
+                        recentIds = RecentIdsPrefs.load(getApplication()),
+                        progressMessage = "",
+                    )
                 } else {
                     val msg = json.optString("user_message", "获取信息失败")
                     _uiState.value = _uiState.value.copy(
@@ -136,6 +170,44 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = _uiState.value.copy(
                     status = DownloadStatus.Error(translateError(e)),
                     errorMessage = translateError(e),
+                )
+            }
+        }
+    }
+
+    // ── Step 2: download from the info card (no re-fetch) ───
+
+    fun onCardDownloadTapped() {
+        val state = _uiState.value
+        val album = state.resolvedAlbum ?: return
+        val chapters = state.chapters
+        when {
+            chapters.isEmpty() -> _uiState.value = state.copy(
+                status = DownloadStatus.Error("无章节信息，请重新解析"),
+                errorMessage = "无章节信息，请重新解析",
+            )
+
+            chapters.size == 1 -> {
+                // Single chapter — skip if already downloaded
+                if (chapters[0].downloaded) {
+                    _uiState.value = state.copy(
+                        status = DownloadStatus.Error("该章节已下载"),
+                        errorMessage = "该章节已下载",
+                    )
+                } else {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        downloadSingleChapter(album.albumId, album.title)
+                    }
+                }
+            }
+
+            else -> {
+                // Multi-chapter — show dialog, pre-select non-downloaded
+                _uiState.value = state.copy(
+                    status = DownloadStatus.Idle,
+                    showChapterDialog = true,
+                    selectedChapters = chapters.filter { !it.downloaded }.map { it.index }.toSet(),
+                    progressMessage = "",
                 )
             }
         }
@@ -163,16 +235,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onConfirmChapterSelection() {
-        val selected = _uiState.value.selectedChapters
+        val state = _uiState.value
+        val album = state.resolvedAlbum ?: return
+        val selected = state.selectedChapters
         if (selected.isEmpty()) {
-            _uiState.value = _uiState.value.copy(
+            _uiState.value = state.copy(
                 status = DownloadStatus.Error("请至少选择一章"),
                 errorMessage = "请至少选择一章",
             )
             return
         }
 
-        _uiState.value = _uiState.value.copy(
+        _uiState.value = state.copy(
             showChapterDialog = false,
             status = DownloadStatus.Downloading,
             progressMessage = "准备下载 ${selected.size} 章...",
@@ -185,13 +259,13 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         viewModelScope.launch(Dispatchers.IO) {
-            downloadSelectedChapters(selected.toList())
+            downloadSelectedChapters(selected.toList(), album.albumId, album.title)
         }
     }
 
     // ── Download logic ───────────────────────────────────────
 
-    private suspend fun downloadSingleChapter(albumId: String) {
+    private suspend fun downloadSingleChapter(albumId: String, albumTitle: String) {
         _uiState.value = _uiState.value.copy(
             status = DownloadStatus.Downloading,
             progressMessage = "准备下载...",
@@ -220,16 +294,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 // Save record
                 val chapterTitle = _uiState.value.chapters.firstOrNull()?.title
-                    ?: _uiState.value.albumTitle.ifBlank { fileName }
+                    ?: albumTitle.ifBlank { fileName }
                 historyManager.add(DownloadRecord(
                     albumId = albumId,
-                    albumTitle = _uiState.value.albumTitle.ifBlank { fileName },
+                    albumTitle = albumTitle.ifBlank { fileName },
                     chapterIndex = 0,
                     chapterTitle = chapterTitle,
                     pdfPath = pdfPath,
                     downloadTime = System.currentTimeMillis(),
                     fileSize = File(pdfPath).length(),
                 ))
+                refreshChapterDownloadedFlags(albumId)
             } else {
                 val msg = json.optString("user_message", "下载失败")
                 _uiState.value = _uiState.value.copy(
@@ -249,14 +324,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun downloadSelectedChapters(indices: List<Int>) {
+    private suspend fun downloadSelectedChapters(
+        indices: List<Int>,
+        albumId: String,
+        albumTitle: String,
+    ) {
         pollJob = viewModelScope.launch(Dispatchers.IO) { pollProgress() }
 
         try {
             val indicesJson = JSONArray(indices).toString()
             val jsonStr = callPython(
                 "download_selected_chapters",
-                _uiState.value.albumId.trim(),
+                albumId,
                 indicesJson,
                 outputDir,
                 ""
@@ -277,8 +356,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // Save records for successful downloads
-                val albumId = _uiState.value.albumId.trim()
-                val albumTitle = _uiState.value.albumTitle
                 val now = System.currentTimeMillis()
                 for (r in results) {
                     if (r.pdfPath != null) {
@@ -296,8 +373,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val allSuccess = results.all { it.pdfPath != null }
                 val firstPdf = results.firstOrNull()?.pdfPath
+                // 部分失败也置 Success：MultiChapterSuccessSection 会逐章展示失败明细
                 _uiState.value = _uiState.value.copy(
-                    status = if (allSuccess) DownloadStatus.Success else DownloadStatus.Idle,
+                    status = DownloadStatus.Success,
                     pdfPath = firstPdf,
                     chapterResults = results,
                     progressFraction = null,
@@ -305,6 +383,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     errorMessage = if (allSuccess) null
                         else "${results.count { it.error != null }} 章失败",
                 )
+                refreshChapterDownloadedFlags(albumId)
             } else {
                 val msg = json.optString("user_message", "下载失败")
                 _uiState.value = _uiState.value.copy(
@@ -322,6 +401,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             pollJob?.cancel()
             try { File(outputDir, "progress.json").delete() } catch (_: Exception) {}
         }
+    }
+
+    /** 下载成功后刷新章节"已下载"标记（磁盘读，很快），保证回到卡片后标记最新。 */
+    private fun refreshChapterDownloadedFlags(albumId: String) {
+        val existing = historyManager.getDownloadedChapterIndices(albumId)
+        _uiState.value = _uiState.value.copy(
+            chapters = _uiState.value.chapters.map {
+                it.copy(downloaded = it.index in existing)
+            }
+        )
     }
 
     private suspend fun pollProgress() {
@@ -343,6 +432,29 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // ── Smart input: clipboard & history ─────────────────────
+
+    /** 读取剪贴板并填入输入框（走统一的 URL 规整链路，不自动解析）。 */
+    fun onPasteTapped() {
+        val app = getApplication<Application>()
+        val cm = app.getSystemService(ClipboardManager::class.java) ?: return
+        val clip = cm.primaryClip ?: return
+        if (clip.itemCount == 0) return
+        val text = clip.getItemAt(0)?.coerceToText(app)?.toString()?.trim()
+        if (!text.isNullOrEmpty()) onAlbumIdChanged(text)
+    }
+
+    /** 点击历史 chip：填充并自动解析。 */
+    fun onRecentIdTapped(id: String) {
+        _uiState.value = _uiState.value.copy(albumId = id)
+        onResolveTapped()
+    }
+
+    fun onClearRecentIds() {
+        RecentIdsPrefs.clear(getApplication())
+        _uiState.value = _uiState.value.copy(recentIds = emptyList())
+    }
+
     // ── Helpers ──────────────────────────────────────────────
 
     /**
@@ -360,6 +472,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 else -> throw IllegalArgumentException("Unknown python function: $funcName")
             }
         }
+    }
+
+    private fun parseStringArray(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
     }
 
     private fun translateError(e: Exception): String {

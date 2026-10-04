@@ -12,6 +12,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/** 字节数格式化（B / KB / MB），供设置页与漫画页共用。 */
+internal fun formatBytes(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+}
+
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val historyManager = DownloadHistoryManager(application.filesDir)
@@ -78,11 +85,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun formatSize(bytes: Long): String = when {
-        bytes < 1024 -> "${bytes} B"
-        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-    }
+    fun formatSize(bytes: Long): String = formatBytes(bytes)
 
     fun formatTime(timestamp: Long): String {
         val sdf = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())

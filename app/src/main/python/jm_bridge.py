@@ -1038,7 +1038,8 @@ def get_album_info(album_id: str, proxy_url: str = "", covers_dir: str = "") -> 
     Fetch album metadata (title + chapter list) WITHOUT downloading images.
 
     Returns JSON:
-      {"success": true, "title": "...",
+      {"success": true, "title": "...", "author": "...", "tags": [...],
+       "page_count": 123,
        "chapters": [{"index":0,"title":"..."}, ...],
        "cover_path": "/path/to/cover.jpg"}   (cover_path may be '')
       {"success": false, "error": "...", "user_message": "..."}
@@ -1075,9 +1076,17 @@ def get_album_info(album_id: str, proxy_url: str = "", covers_dir: str = "") -> 
 
         cover_path = _fetch_album_cover(client, album, proxy, covers_dir)
 
+        # 元信息（作者/标签/页数），防御式取值兼容不同 jmcomic 版本
+        authors = [str(a) for a in (getattr(album, 'authors', None) or []) if a]
+        tags = [str(t) for t in (getattr(album, 'tags', None) or []) if t]
+        page_count = int(getattr(album, 'page_count', 0) or 0)
+
         return json.dumps({
             "success": True,
             "title": album.title or '',
+            "author": ', '.join(authors),
+            "tags": tags,
+            "page_count": page_count,
             "chapters": chapters,
             "cover_path": cover_path or '',
         }, ensure_ascii=False)

@@ -8,14 +8,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -31,17 +34,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jmcomic.pdfapp.data.BackgroundConfig
+import com.jmcomic.pdfapp.data.BackgroundPrefs
 import com.jmcomic.pdfapp.data.ThemePrefs
+import com.jmcomic.pdfapp.ui.components.BackgroundLayer
+import com.jmcomic.pdfapp.ui.screen.ComicsScreen
 import com.jmcomic.pdfapp.ui.screen.HomeScreen
 import com.jmcomic.pdfapp.ui.screen.SettingsScreen
 import com.jmcomic.pdfapp.ui.theme.JMComicPDFTheme
-import com.jmcomic.pdfapp.ui.theme.ThemeMode
 import com.jmcomic.pdfapp.viewmodel.HomeViewModel
 import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
 import java.io.File
@@ -62,10 +69,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var themeMode by remember { mutableStateOf(ThemePrefs.load(this)) }
-            val cycleTheme = {
-                themeMode = ThemePrefs.next(themeMode)
-                ThemePrefs.save(this, themeMode)
-            }
+            var background by remember { mutableStateOf(BackgroundPrefs.load(this)) }
 
             JMComicPDFTheme(themeMode = themeMode) {
                 val homeViewModel: HomeViewModel = viewModel()
@@ -73,11 +77,15 @@ class MainActivity : ComponentActivity() {
                 MainShell(
                     homeViewModel = homeViewModel,
                     settingsViewModel = settingsViewModel,
-                    themeMode = themeMode,
-                    onCycleTheme = cycleTheme,
+                    backgroundPath = background.path,
+                    backgroundOpacity = background.opacity,
+                    onBackgroundChanged = { path, opacity ->
+                        background = BackgroundConfig(path, opacity)
+                        BackgroundPrefs.save(this, path, opacity)
+                    },
                     onOpenPdf = { filePath -> openPdf(filePath) },
                     onTabChanged = { tab ->
-                        // Refresh history when switching to settings tab
+                        // Refresh history when switching to comics tab
                         if (tab == 1) settingsViewModel.refreshHistory()
                     }
                 )
@@ -121,6 +129,7 @@ private data class Tab(
 
 private val TABS = listOf(
     Tab("首页", Icons.Rounded.Home, Icons.Outlined.Home),
+    Tab("漫画", Icons.Rounded.CollectionsBookmark, Icons.Outlined.CollectionsBookmark),
     Tab("设置", Icons.Rounded.Settings, Icons.Outlined.Settings),
 )
 
@@ -130,76 +139,94 @@ private val TABS = listOf(
 private fun MainShell(
     homeViewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel,
-    themeMode: ThemeMode,
-    onCycleTheme: () -> Unit,
+    backgroundPath: String?,
+    backgroundOpacity: Float,
+    onBackgroundChanged: (String?, Float) -> Unit,
     onOpenPdf: (String) -> Unit,
     onTabChanged: (Int) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = scheme.background,
-        bottomBar = {
-            NavigationBar(
-                containerColor = scheme.surface,
-                tonalElevation = 0.dp,
-            ) {
-                TABS.forEachIndexed { index, tab ->
-                    val isSelected = selectedTab == index
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick = {
-                            if (selectedTab != index) {
-                                selectedTab = index
-                                onTabChanged(index)
-                            }
-                        },
-                        icon = {
-                            Icon(
-                                if (isSelected) tab.selectedIcon else tab.unselectedIcon,
-                                contentDescription = tab.label,
-                            )
-                        },
-                        label = {
-                            Text(
-                                tab.label,
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                            )
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = scheme.primary,
-                            selectedTextColor = scheme.primary,
-                            unselectedIconColor = scheme.onSurfaceVariant,
-                            unselectedTextColor = scheme.onSurfaceVariant,
-                            indicatorColor = scheme.primary.copy(alpha = 0.10f),
-                        ),
-                    )
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 基础底色（无背景图时的回退）
+        Box(Modifier.fillMaxSize().background(scheme.background))
+
+        // 全局背景图层（三页共用）
+        backgroundPath?.let { path ->
+            BackgroundLayer(
+                path = path,
+                opacity = backgroundOpacity,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            containerColor = Color.Transparent,
+            bottomBar = {
+                NavigationBar(
+                    containerColor = scheme.surface.copy(alpha = 0.93f),
+                    tonalElevation = 0.dp,
+                ) {
+                    TABS.forEachIndexed { index, tab ->
+                        val isSelected = selectedTab == index
+                        NavigationBarItem(
+                            selected = isSelected,
+                            onClick = {
+                                if (selectedTab != index) {
+                                    selectedTab = index
+                                    onTabChanged(index)
+                                }
+                            },
+                            icon = {
+                                Icon(
+                                    if (isSelected) tab.selectedIcon else tab.unselectedIcon,
+                                    contentDescription = tab.label,
+                                )
+                            },
+                            label = {
+                                Text(
+                                    tab.label,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                )
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = scheme.primary,
+                                selectedTextColor = scheme.primary,
+                                unselectedIconColor = scheme.onSurfaceVariant,
+                                unselectedTextColor = scheme.onSurfaceVariant,
+                                indicatorColor = scheme.primary.copy(alpha = 0.10f),
+                            ),
+                        )
+                    }
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
-        ) {
-            Crossfade(
-                targetState = selectedTab,
-                animationSpec = tween(durationMillis = 250),
-                label = "tab-crossfade"
-            ) { tab ->
-                when (tab) {
-                    0 -> HomeScreen(
-                        viewModel = homeViewModel,
-                        onOpenPdf = onOpenPdf,
-                    )
-                    1 -> SettingsScreen(
-                        viewModel = settingsViewModel,
-                        onOpenPdf = onOpenPdf,
-                        themeMode = themeMode,
-                        onCycleTheme = onCycleTheme,
-                    )
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
+            ) {
+                Crossfade(
+                    targetState = selectedTab,
+                    animationSpec = tween(durationMillis = 250),
+                    label = "tab-crossfade"
+                ) { tab ->
+                    when (tab) {
+                        0 -> HomeScreen(
+                            viewModel = homeViewModel,
+                            onOpenPdf = onOpenPdf,
+                        )
+                        1 -> ComicsScreen(
+                            viewModel = settingsViewModel,
+                            onOpenPdf = onOpenPdf,
+                        )
+                        2 -> SettingsScreen(
+                            backgroundPath = backgroundPath,
+                            backgroundOpacity = backgroundOpacity,
+                            onBackgroundChanged = onBackgroundChanged,
+                        )
+                    }
                 }
             }
         }

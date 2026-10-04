@@ -1,19 +1,13 @@
 package com.jmcomic.pdfapp.ui.screen
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,377 +16,386 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.BrightnessAuto
-import androidx.compose.material.icons.rounded.CollectionsBookmark
-import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.material.icons.rounded.DeleteForever
-import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.ExpandLess
-import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.LightMode
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SearchOff
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Opacity
+import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.Wallpaper
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.jmcomic.pdfapp.model.ComicGroup
-import com.jmcomic.pdfapp.model.DownloadRecord
-import com.jmcomic.pdfapp.ui.components.CoverImage
-import com.jmcomic.pdfapp.ui.theme.AppTheme
-import com.jmcomic.pdfapp.ui.theme.ThemeMode
-import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
+import com.jmcomic.pdfapp.viewmodel.formatBytes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
+/** 存储统计结果。 */
+private data class StorageStats(
+    val comicCount: Int,
+    val chapterCount: Int,
+    val pdfBytes: Long,
+    val coverBytes: Long,
+)
+
+/** 遍历 pdf_output 与 covers 目录统计占用（排除下载临时目录 downloads）。 */
+private fun computeStorageStats(filesDir: File): StorageStats {
+    var comics = 0
+    var chapters = 0
+    var pdfBytes = 0L
+    val pdfDir = File(filesDir, "pdf_output")
+    if (pdfDir.isDirectory) {
+        pdfDir.listFiles()?.filter { it.isFile && it.extension == "pdf" }?.forEach {
+            chapters++
+            pdfBytes += it.length()
+        }
+        pdfDir.listFiles()?.filter { it.isDirectory && it.name != "downloads" }?.forEach { comicDir ->
+            comics++
+            comicDir.listFiles()?.filter { it.isFile && it.extension == "pdf" }?.forEach {
+                chapters++
+                pdfBytes += it.length()
+            }
+        }
+    }
+    var coverBytes = 0L
+    val coversDir = File(filesDir, "covers")
+    if (coversDir.isDirectory) {
+        coverBytes = coversDir.listFiles()?.filter { it.isFile }?.sumOf { it.length() } ?: 0L
+    }
+    return StorageStats(comics, chapters, pdfBytes, coverBytes)
+}
+
+/**
+ * 设置 tab：背景图片（选图→裁剪、透明度、恢复默认）+ 存储统计与缓存清理 + 版本号。
+ * 背景状态由 MainActivity 持有并全局应用，本页通过回调修改。
+ */
 @Composable
 fun SettingsScreen(
-    viewModel: SettingsViewModel,
-    onOpenPdf: (String) -> Unit = {},
-    themeMode: ThemeMode = ThemeMode.SYSTEM,
-    onCycleTheme: () -> Unit = {},
+    backgroundPath: String?,
+    backgroundOpacity: Float,
+    onBackgroundChanged: (path: String?, opacity: Float) -> Unit,
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val isSearchVisible by viewModel.isSearchVisible.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    // 待确认删除的漫画（先弹二次确认框）
-    var pendingDelete by remember { mutableStateOf<ComicGroup?>(null) }
+    var pendingCropUri by remember { mutableStateOf<Uri?>(null) }
+    var storageStats by remember { mutableStateOf<StorageStats?>(null) }
+    var clearingCache by remember { mutableStateOf(false) }
+
+    // 每次进入设置页重新统计（Crossfade 切 tab 会重建本页）
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            storageStats = computeStorageStats(context.filesDir)
+        }
+    }
+
+    // 清除封面缓存后重新统计
+    fun clearCoverCache() {
+        if (clearingCache) return
+        clearingCache = true
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    File(context.filesDir, "covers").listFiles()?.forEach { it.delete() }
+                }
+                storageStats = computeStorageStats(context.filesDir)
+            }
+            clearingCache = false
+        }
+    }
+
+    // 选图（系统 Photo Picker，低版本自动降级文档选择器，无需权限）
+    val pickImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) pendingCropUri = uri
+    }
+
+    // 恢复默认背景：删文件 + 置空路径（透明度保留）
+    fun resetBackground() {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    File(context.filesDir, "backgrounds").listFiles()?.forEach { it.delete() }
+                }
+            }
+            onBackgroundChanged(null, backgroundOpacity)
+        }
+    }
+
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrDefault("")
+    }
 
     Column(
         modifier = Modifier.fillMaxSize()
-            .background(scheme.background)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // ── Top bar ──
         Row(
             modifier = Modifier.fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 56.dp, bottom = 8.dp),
+                .padding(top = 56.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "下载管理",
+                "设置",
                 style = MaterialTheme.typography.headlineMedium,
                 color = scheme.onBackground,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f)
             )
-            // 主题模式切换：跟随系统 → 浅色 → 深色
-            IconButton(onClick = onCycleTheme) {
-                Icon(
-                    when (themeMode) {
-                        ThemeMode.SYSTEM -> Icons.Rounded.BrightnessAuto
-                        ThemeMode.LIGHT -> Icons.Rounded.LightMode
-                        ThemeMode.DARK -> Icons.Rounded.DarkMode
-                    },
-                    contentDescription = "切换主题",
-                    tint = scheme.onSurfaceVariant
-                )
-            }
-            IconButton(onClick = { viewModel.toggleSearch() }) {
-                Icon(
-                    if (isSearchVisible) Icons.Rounded.SearchOff
-                    else Icons.Rounded.Search,
-                    contentDescription = "搜索",
-                    tint = if (isSearchVisible) scheme.primary else scheme.onSurfaceVariant
-                )
-            }
         }
 
-        // ── Search bar ──
-        AnimatedVisibility(
-            visible = isSearchVisible,
-            enter = fadeIn() + slideInVertically(),
-            exit = fadeOut() + slideOutVertically()
-        ) {
-            val focusManager = LocalFocusManager.current
-            OutlinedTextField(
-                value = uiState.searchQuery,
-                onValueChange = viewModel::onSearchQueryChanged,
-                placeholder = { Text("搜索漫画ID或标题...") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                leadingIcon = {
-                    Icon(Icons.Rounded.Search, contentDescription = null,
-                        tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = scheme.onSurface,
-                    unfocusedTextColor = scheme.onSurface,
-                    cursorColor = scheme.primary,
-                    focusedBorderColor = scheme.primary,
-                    unfocusedBorderColor = scheme.outlineVariant,
-                    focusedContainerColor = scheme.surfaceContainerLow,
-                    unfocusedContainerColor = scheme.surfaceContainerLow,
-                ),
-                shape = RoundedCornerShape(12.dp)
-            )
-        }
-
-        // ── Count ──
-        val totalChapters = uiState.filteredGroups.sumOf { it.chapters.size }
-        Text(
-            if (uiState.searchQuery.isNotBlank())
-                "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章"
-            else "${uiState.filteredGroups.size} 部漫画 · $totalChapters 章",
-            color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
-            style = MaterialTheme.typography.labelSmall,
-            letterSpacing = 1.sp,
-            modifier = Modifier.padding(start = 24.dp, top = 8.dp, bottom = 4.dp)
-        )
-
-        // ── List ──
-        if (uiState.filteredGroups.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(32.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Rounded.CollectionsBookmark, contentDescription = null,
-                        tint = scheme.onSurfaceVariant.copy(alpha = 0.3f), modifier = Modifier.size(64.dp))
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        if (uiState.searchQuery.isNotBlank()) "未找到匹配的下载记录"
-                        else "暂无下载记录",
-                        color = scheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
-            ) {
-                itemsIndexed(
-                    items = uiState.filteredGroups,
-                    key = { _, group -> group.albumId }
-                ) { _, group ->
-                    ComicGroupCard(
-                        group = group,
-                        formatSize = viewModel::formatSize,
-                        formatTime = viewModel::formatTime,
-                        onToggle = { viewModel.toggleGroup(group.albumId) },
-                        onOpenPdf = onOpenPdf,
-                        onDeleteChapter = viewModel::deleteChapter,
-                        onDeleteComic = { pendingDelete = group },
-                    )
-                    Spacer(Modifier.height(10.dp))
-                }
-                item { Spacer(Modifier.height(80.dp)) }
-            }
-        }
-
-        // ── 删除整部漫画二次确认 ──
-        pendingDelete?.let { group ->
-            AlertDialog(
-                onDismissRequest = { pendingDelete = null },
-                containerColor = scheme.surface,
-                titleContentColor = scheme.onSurface,
-                textContentColor = scheme.onSurfaceVariant,
-                title = { Text("删除整部漫画？") },
-                text = {
-                    Text(
-                        "将删除《${group.albumTitle.ifBlank { "JM${group.albumId}" }}》" +
-                            "的全部 ${group.chapters.size} 章 PDF，且无法恢复。"
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.deleteComic(group.albumId)
-                        pendingDelete = null
-                    }) {
-                        Text("删除", color = scheme.error, fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { pendingDelete = null }) {
-                        Text("取消", color = scheme.onSurfaceVariant)
-                    }
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun ComicGroupCard(
-    group: ComicGroup,
-    formatSize: (Long) -> String,
-    formatTime: (Long) -> String,
-    onToggle: () -> Unit,
-    onOpenPdf: (String) -> Unit,
-    onDeleteChapter: (String) -> Unit,
-    onDeleteComic: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    val cardShape = RoundedCornerShape(18.dp)
-    Column(
-        modifier = Modifier.fillMaxWidth()
-            .shadow(
-                elevation = 5.dp,
-                shape = cardShape,
-                spotColor = Color.Black.copy(alpha = 0.07f),
-                ambientColor = Color.Black.copy(alpha = 0.07f),
-            )
-            .clip(cardShape)
-            .background(scheme.surface)
-            .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
-    ) {
-        // ── Comic header (always visible) ──
-        Row(
+        // ── 背景图片卡片 ──
+        val cardShape = RoundedCornerShape(20.dp)
+        Column(
             modifier = Modifier.fillMaxWidth()
-                .clickable(onClick = onToggle)
-                .padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 封面缩略图（缺失时渐变占位）
-            CoverImage(
-                albumId = group.albumId,
-                title = group.albumTitle,
-                modifier = Modifier.size(width = 50.dp, height = 68.dp),
-                shape = RoundedCornerShape(10.dp),
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = group.albumTitle.ifBlank { "JM${group.albumId}" },
-                    color = scheme.onSurface,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                .shadow(
+                    elevation = 5.dp,
+                    shape = cardShape,
+                    spotColor = Color.Black.copy(alpha = 0.07f),
+                    ambientColor = Color.Black.copy(alpha = 0.07f),
                 )
-                Spacer(Modifier.height(4.dp))
+                .clip(cardShape)
+                .background(scheme.surface.copy(alpha = 0.95f))
+                .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
+                .padding(vertical = 8.dp)
+        ) {
+            // 选图行
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable {
+                        pickImage.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Rounded.Wallpaper,
+                    contentDescription = null,
+                    tint = scheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "背景图片",
+                        color = scheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (backgroundPath != null) "已设置" else "未设置",
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = scheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            // 分隔线
+            Spacer(
+                Modifier.fillMaxWidth().height(1.dp)
+                    .background(scheme.outlineVariant.copy(alpha = 0.4f))
+            )
+
+            // 透明度行
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "JM${group.albumId}",
-                        color = scheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall,
+                    Icon(
+                        Icons.Rounded.Opacity,
+                        contentDescription = null,
+                        tint = scheme.primary,
+                        modifier = Modifier.size(22.dp)
                     )
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(14.dp))
                     Text(
-                        "${group.chapters.size} 章",
+                        "背景透明度",
+                        color = scheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${(backgroundOpacity * 100).toInt()}%",
                         color = scheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(scheme.primary.copy(alpha = 0.10f))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Slider(
+                    value = backgroundOpacity,
+                    onValueChange = { onBackgroundChanged(backgroundPath, it) },
+                    valueRange = 0.15f..1f,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
+            }
+
+            // 恢复默认行
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+            ) {
+                TextButton(
+                    onClick = ::resetBackground,
+                    enabled = backgroundPath != null
+                ) {
+                    Icon(
+                        Icons.Rounded.Restore,
+                        contentDescription = null,
+                        tint = if (backgroundPath != null) scheme.onSurfaceVariant
+                        else scheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "恢复默认背景",
+                        color = if (backgroundPath != null) scheme.onSurfaceVariant
+                        else scheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
-            IconButton(onClick = onDeleteComic) {
-                Icon(Icons.Rounded.DeleteForever, contentDescription = "删除全部",
-                    tint = scheme.error.copy(alpha = 0.55f), modifier = Modifier.size(20.dp))
-            }
-            Icon(
-                if (group.expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                contentDescription = null,
-                tint = scheme.onSurfaceVariant,
-                modifier = Modifier.size(20.dp)
-            )
         }
 
-        // ── Chapter list (expandable) ──
-        AnimatedVisibility(
-            visible = group.expanded,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
+        Spacer(Modifier.height(16.dp))
+
+        // ── 存储卡片 ──
+        val stats = storageStats
+        Column(
+            modifier = Modifier.fillMaxWidth()
+                .shadow(
+                    elevation = 5.dp,
+                    shape = cardShape,
+                    spotColor = Color.Black.copy(alpha = 0.07f),
+                    ambientColor = Color.Black.copy(alpha = 0.07f),
+                )
+                .clip(cardShape)
+                .background(scheme.surface.copy(alpha = 0.95f))
+                .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
+                .padding(vertical = 8.dp)
         ) {
-            Column {
-                for (record in group.chapters) {
-                    ChapterRow(
-                        record = record,
-                        formatSize = formatSize,
-                        formatTime = formatTime,
-                        onOpen = { onOpenPdf(record.pdfPath) },
-                        onDelete = { onDeleteChapter(record.pdfPath) },
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Rounded.Storage,
+                    contentDescription = null,
+                    tint = scheme.primary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "存储占用",
+                        color = scheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stats?.let {
+                            "${it.comicCount} 部漫画 · ${it.chapterCount} 章 · ${formatBytes(it.pdfBytes)}"
+                        } ?: "统计中...",
+                        color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            Spacer(
+                Modifier.fillMaxWidth().height(1.dp)
+                    .background(scheme.outlineVariant.copy(alpha = 0.4f))
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "封面缓存 ${stats?.let { formatBytes(it.coverBytes) } ?: "-"}",
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(
+                    onClick = ::clearCoverCache,
+                    enabled = (stats?.coverBytes ?: 0) > 0 && !clearingCache
+                ) {
+                    Icon(
+                        Icons.Rounded.DeleteSweep,
+                        contentDescription = null,
+                        tint = if ((stats?.coverBytes ?: 0) > 0) scheme.onSurfaceVariant
+                        else scheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        if (clearingCache) "清除中..." else "清除",
+                        color = if ((stats?.coverBytes ?: 0) > 0) scheme.onSurfaceVariant
+                        else scheme.onSurfaceVariant.copy(alpha = 0.3f),
+                        style = MaterialTheme.typography.labelMedium
                     )
                 }
             }
         }
+
+        Spacer(Modifier.height(24.dp))
+        Text(
+            "版本 $versionName",
+            color = scheme.onSurfaceVariant.copy(alpha = 0.5f),
+            style = MaterialTheme.typography.labelSmall,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.height(48.dp))
     }
-}
 
-@Composable
-private fun ChapterRow(
-    record: DownloadRecord,
-    formatSize: (Long) -> String,
-    formatTime: (Long) -> String,
-    onOpen: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val scheme = MaterialTheme.colorScheme
-    val success = AppTheme.colors.success
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, bottom = 8.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(scheme.surfaceContainerLow)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = record.chapterTitle,
-                color = scheme.onSurface,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(formatTime(record.downloadTime),
-                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.labelSmall)
-                Text(formatSize(record.fileSize),
-                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.labelSmall)
-            }
-        }
-        Button(
-            onClick = onOpen,
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = success),
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-            Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null,
-                tint = Color.White, modifier = Modifier.size(13.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("查看", color = Color.White, style = MaterialTheme.typography.labelSmall)
-        }
-        IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-            Icon(Icons.Rounded.DeleteOutline, contentDescription = "删除",
-                tint = scheme.error.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
-        }
+    // ── 裁剪界面 ──
+    pendingCropUri?.let { uri ->
+        CropScreen(
+            imageUri = uri,
+            onConfirm = { path ->
+                pendingCropUri = null
+                onBackgroundChanged(path, backgroundOpacity)
+            },
+            onDismiss = { pendingCropUri = null },
+        )
     }
 }

@@ -12,6 +12,17 @@ sealed class DownloadStatus {
 }
 
 /**
+ * 漫画元信息（两步流程第一步"解析"的产物）。
+ */
+data class AlbumInfo(
+    val albumId: String,
+    val title: String,
+    val author: String,          // 作者，多人时 ", " 连接（Python 侧已 join）
+    val tags: List<String>,      // 标签
+    val pageCount: Int           // 总页数（jmcomic page_count，可能为 0）
+)
+
+/**
  * A single chapter/photo within an album.
  */
 data class ChapterInfo(
@@ -75,8 +86,10 @@ data class PdfInfo(
 data class HomeUiState(
     val albumId: String = "",
     val status: DownloadStatus = DownloadStatus.Idle,
-    // Album info (fetched before download)
-    val albumTitle: String = "",
+    // Album info resolved by the two-step flow (null = not resolved / invalidated)
+    val resolvedAlbum: AlbumInfo? = null,
+    // Recently entered album IDs (SharedPreferences-backed)
+    val recentIds: List<String> = emptyList(),
     val chapters: List<ChapterInfo> = emptyList(),
     // Chapter selection dialog
     val showChapterDialog: Boolean = false,

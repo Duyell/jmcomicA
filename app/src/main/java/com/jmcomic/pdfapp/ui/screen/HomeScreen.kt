@@ -9,6 +9,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,17 +28,22 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -71,7 +78,7 @@ fun HomeScreen(
     if (uiState.showChapterDialog) {
         ChapterSelectDialog(
             albumId = uiState.albumId,
-            albumTitle = uiState.albumTitle,
+            albumTitle = uiState.resolvedAlbum?.title.orEmpty(),
             chapters = uiState.chapters,
             selectedChapters = uiState.selectedChapters,
             onToggle = viewModel::onToggleChapter,
@@ -84,7 +91,6 @@ fun HomeScreen(
 
     Column(
         modifier = Modifier.fillMaxSize()
-            .background(scheme.background)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -103,6 +109,10 @@ fun HomeScreen(
         Spacer(Modifier.height(32.dp))
 
         // ── Input card ──
+        val isResolving = uiState.status is DownloadStatus.FetchingInfo
+        val isDownloading = uiState.status is DownloadStatus.Downloading
+        val isBusy = isResolving || isDownloading
+
         val cardShape = RoundedCornerShape(24.dp)
         Column(
             modifier = Modifier.fillMaxWidth()
@@ -121,11 +131,23 @@ fun HomeScreen(
             OutlinedTextField(
                 value = uiState.albumId,
                 onValueChange = viewModel::onAlbumIdChanged,
-                label = { Text("漫画ID") },
-                placeholder = { Text("例如: 350234") },
+                label = { Text("漫画ID 或链接") },
+                placeholder = { Text("例如: 350234 或 完整链接") },
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                enabled = !isBusy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 modifier = Modifier.fillMaxWidth(),
+                trailingIcon = {
+                    IconButton(onClick = viewModel::onPasteTapped, enabled = !isBusy) {
+                        Icon(
+                            Icons.Rounded.ContentPaste,
+                            contentDescription = "粘贴",
+                            tint = if (isBusy) scheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else scheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = scheme.onSurface,
                     unfocusedTextColor = scheme.onSurface,
@@ -142,19 +164,40 @@ fun HomeScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            val isBusy = uiState.status is DownloadStatus.Downloading
-                    || uiState.status is DownloadStatus.FetchingInfo
-
             GradientButton(
-                text = if (isBusy) "处理中..." else "下载 PDF",
-                onClick = viewModel::onDownloadTapped,
+                text = when {
+                    isResolving -> "解析中..."
+                    isDownloading -> "下载中..."
+                    else -> "解析"
+                },
+                onClick = viewModel::onResolveTapped,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !isBusy,
-                leadingIcon = Icons.Rounded.Download,
+                leadingIcon = Icons.Rounded.Search,
             )
         }
 
         Spacer(Modifier.height(24.dp))
+
+        // ── Recent IDs (only before resolve) ──
+        if (uiState.resolvedAlbum == null && uiState.recentIds.isNotEmpty()) {
+            RecentIdsSection(
+                recentIds = uiState.recentIds,
+                onIdTapped = viewModel::onRecentIdTapped,
+                onClear = viewModel::onClearRecentIds,
+            )
+        }
+
+        // ── Resolved album info card (step 2) ──
+        val resolvedAlbum = uiState.resolvedAlbum
+        if (resolvedAlbum != null && uiState.status is DownloadStatus.Idle) {
+            Spacer(Modifier.height(20.dp))
+            AlbumInfoCard(
+                album = resolvedAlbum,
+                chapters = uiState.chapters,
+                onDownloadTapped = viewModel::onCardDownloadTapped,
+            )
+        }
 
         // ── Status ──
         AnimatedVisibility(
@@ -301,7 +344,7 @@ private fun SingleSuccessSection(
             // 漫画封面（有则展示）
             CoverImage(
                 albumId = uiState.albumId,
-                title = uiState.albumTitle,
+                title = uiState.resolvedAlbum?.title.orEmpty(),
                 modifier = Modifier.size(width = 52.dp, height = 68.dp),
                 shape = RoundedCornerShape(10.dp),
             )
@@ -447,6 +490,66 @@ private fun MultiChapterSuccessSection(
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp)
         ) {
             Text("完成", color = scheme.onBackground, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+// ── Recent IDs section ──────────────────────────────────────
+
+/** 最近输入的漫画 ID 历史 chips（仅解析前展示）。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecentIdsSection(
+    recentIds: List<String>,
+    onIdTapped: (String) -> Unit,
+    onClear: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    Icons.Rounded.History,
+                    contentDescription = null,
+                    tint = scheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "最近输入",
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.labelMedium,
+                    letterSpacing = 1.sp,
+                )
+            }
+            TextButton(
+                onClick = onClear,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) {
+                Text(
+                    "清除",
+                    color = scheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            recentIds.forEach { id ->
+                AssistChip(
+                    onClick = { onIdTapped(id) },
+                    label = { Text(id, style = MaterialTheme.typography.labelMedium) },
+                )
+            }
         }
     }
 }
