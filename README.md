@@ -6,16 +6,19 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 
 ## 功能
 
-- 输入 JM 漫画车号（album ID），自动识别单章节/多章节漫画
+- **两步下载流程**：输入车号 → 解析 → 漫画信息卡片（封面 / 标题 / 作者 / 标签 / 章节数）→ 选择下载
+- **智能输入**：粘贴完整链接自动提取车号（`/album/{id}`、`/photo/{id}`、`?id={id}`），一键读取剪贴板，最近输入历史
 - **单章节漫画**：一键下载，直接生成 PDF
 - **多章节漫画**：弹出章节列表，自由勾选要下载的章节，每章生成独立 PDF——不再合并为单个巨大文件
 - **多漫画管理**：PDF 按漫画 ID 分目录存储，支持同时存放多部漫画
-- **已下载跳过**：再次搜索已下载的漫画时，已下载章节显示标记并默认跳过
-- **下载管理**：设置页漫画卡片式分组，可展开查看章节、模糊搜索、删除单章或整部
+- **已下载跳过**：再次解析已下载的漫画时，已下载章节显示标记并默认跳过
+- **漫画管理页**：漫画卡片式分组，可展开查看章节、模糊搜索、删除单章或整部
+- **背景图片**：自定义背景（选图 → 裁剪界面），透明度可调，全局生效
+- **存储统计**：已下载漫画 / 章节 / 占用空间统计 + 一键清除封面缓存
 - 自动处理图片扰码（scrambling），还原正确画面
 - 支持 WebP 格式图片（Android 原生解码）
-- **Material 3 主题**：深色模式（跟随系统 / 浅色 / 深色三态切换）+ Android 12+ 动态取色
-- **漫画封面缩略图**：取第一章第一张图（自动解扰），展示于下载管理与章节选择弹窗
+- **Material 3 主题**：深色模式 + Android 12+ 动态取色
+- **漫画封面缩略图**：取第一章第一张图（自动解扰），展示于漫画管理与章节选择弹窗
 - 自适应应用图标（保留原图标图案）+ Android 12+ 启动屏
 - 删除整部漫画二次确认，防止误删
 - 代理自动探测（Clash / v2ray 常见端口），零配置
@@ -25,9 +28,9 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
 | 层级 | 技术 |
 |------|------|
 | UI | Kotlin + Jetpack Compose + Material 3 |
-| 导航 | Scaffold + NavigationBar（首页 / 设置） |
+| 导航 | Scaffold + NavigationBar（首页 / 漫画 / 设置） |
 | 状态管理 | ViewModel + StateFlow |
-| 数据持久化 | JSON 文件（下载历史记录） |
+| 数据持久化 | JSON 文件（下载历史）+ SharedPreferences（主题 / 背景 / 输入历史） |
 | Python 运行时 | [Chaquopy](https://chaquo.com/chaquopy/) 15.0.1 |
 | 爬虫库 | `jmcomic` 2.7.2 |
 | 图片解码 | Android BitmapFactory + Pillow 9.2.0 |
@@ -56,14 +59,19 @@ Android 漫画下载器 — 输入车号，自动下载漫画图片并合成 PDF
         │   │   └── Models.kt     # 共享数据类（ChapterInfo / DownloadRecord / UI State）
         │   ├── data/
         │   │   ├── DownloadHistoryManager.kt  # 下载历史 JSON 持久化
-        │   │   └── ThemePrefs.kt              # 主题模式持久化（跟随系统/浅色/深色）
+        │   │   ├── ThemePrefs.kt              # 主题模式持久化
+        │   │   ├── BackgroundPrefs.kt         # 背景图片 + 透明度持久化
+        │   │   └── RecentIdsPrefs.kt          # 最近输入车号历史
         │   ├── ui/
-        │   │   ├── components/      # GradientButton / CoverImage 公共组件
+        │   │   ├── components/      # GradientButton / CoverImage / BackgroundLayer 公共组件
         │   │   ├── theme/           # 颜色 / 字体 / Material 3 主题（明暗双主题 + 动态取色）
         │   │   └── screen/
-        │   │       ├── HomeScreen.kt            # 首页（输入 + 下载）
+        │   │       ├── HomeScreen.kt            # 首页（两步下载 + 智能输入）
+        │   │       ├── AlbumInfoCard.kt         # 漫画信息卡片（封面 / 作者 / 标签）
         │   │       ├── ChapterSelectDialog.kt   # 多章节选择弹窗
-        │   │       └── SettingsScreen.kt        # 设置页（下载管理 + 搜索 + 主题切换）
+        │   │       ├── ComicsScreen.kt          # 漫画页（下载管理 + 搜索 + 删除）
+        │   │       ├── CropScreen.kt            # 背景图片裁剪界面
+        │   │       └── SettingsScreen.kt        # 设置页（背景图片 + 存储统计）
         │   └── viewmodel/
         │       ├── HomeViewModel.kt     # 首页逻辑（获取信息 → 下载）
         │       └── SettingsViewModel.kt # 设置页逻辑（历史、搜索、删除）
@@ -109,8 +117,8 @@ gradlew.bat assembleDebug   # Windows
 ```
 
 APK 位于：
-- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.3.1.apk`
-- Release: `app/build/outputs/apk/release/JMComicPdf-v1.3.1.apk`
+- Debug: `app/build/outputs/apk/debug/JMComicPdf-v1.4.0.apk`
+- Release: `app/build/outputs/apk/release/JMComicPdf-v1.4.0.apk`
 
 > 注意：debug 版与 release 版签名不同，从 debug 切换到 release 需先卸载旧版（会清空应用数据），release 之间的升级可直接覆盖安装。
 
@@ -119,11 +127,11 @@ APK 位于：
 ### 单章节漫画
 
 ```
-用户输入车号 → HomeViewModel.onDownloadTapped()
+用户输入车号 → HomeViewModel.onResolveTapped()
     ↓
-Python get_album_info() → 章节数 ≤ 1
-    ↓
-Python get_pdf_path() → download_album_as_pdf()
+Python get_album_info() → 漫画信息卡片（封面 / 作者 / 标签 / 章节数）
+    ↓ 用户点「下载」
+单章节 → downloadSingleChapter() → Python get_pdf_path() → download_album_as_pdf()
     ↓
 1. jmcomic API 下载漫画元数据 + 图片（WebP 格式，已扰码）
 2. Android BitmapFactory 解码 WebP
@@ -136,21 +144,21 @@ HomeScreen → 打开 PDF → FileProvider → 系统阅读器
 ### 多章节漫画
 
 ```
-用户输入车号 → HomeViewModel.onDownloadTapped()
+用户输入车号 → HomeViewModel.onResolveTapped()
     ↓
-Python get_album_info() → 章节数 > 1
-    ↓
+Python get_album_info() → 章节数 > 1 → 信息卡片
+    ↓ 用户点「选择章节下载」
 ChapterSelectDialog（勾选要下载的章节）
     ↓ 用户确认
 Python download_selected_chapters()
     ↓
-1. jmcomic API client 获取专辑详情（78 章）
+1. jmcomic API client 获取专辑详情
 2. option.download_photo(photo_id) 只下载选中章节的图片
 3. 解扰 → 逐章合成 PDF
     ↓
 HomeScreen → 逐章结果卡片（可独立打开每个 PDF）
     ↓
-下载记录存入 download_history.json → 设置页可查看/搜索/删除
+下载记录存入 download_history.json → 漫画页可查看/搜索/删除
 ```
 
 > 封面缓存：`get_album_info()` 会同时下载第一章第一张图并解扰，缓存到 `filesDir/covers/` 作为漫画缩略图；失败时 UI 显示渐变占位图。
