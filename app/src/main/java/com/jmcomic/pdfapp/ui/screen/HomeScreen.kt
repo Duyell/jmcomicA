@@ -1,5 +1,10 @@
 package com.jmcomic.pdfapp.ui.screen
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -28,6 +33,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.History
@@ -51,19 +57,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.jmcomic.pdfapp.model.ChapterDownloadResult
 import com.jmcomic.pdfapp.model.DownloadStatus
+import com.jmcomic.pdfapp.model.DownloadTask
 import com.jmcomic.pdfapp.model.HomeUiState
 import com.jmcomic.pdfapp.ui.components.CoverImage
 import com.jmcomic.pdfapp.ui.components.GradientButton
 import com.jmcomic.pdfapp.ui.theme.AppTheme
+import com.jmcomic.pdfapp.ui.theme.LocalComponentAlpha
 import com.jmcomic.pdfapp.viewmodel.HomeViewModel
 
 @Composable
@@ -73,6 +83,22 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
+
+    // Android 13+：发起下载前请求通知权限；无论是否授权都不阻塞下载
+    // （未授权时前台服务照常运行，只是通知不可见）。
+    val context = LocalContext.current
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* no-op */ }
+    val withNotifPermission: (() -> Unit) -> Unit = { action ->
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        action()
+    }
 
     // Chapter selection dialog
     if (uiState.showChapterDialog) {
@@ -84,7 +110,7 @@ fun HomeScreen(
             onToggle = viewModel::onToggleChapter,
             onSelectAll = viewModel::onSelectAll,
             onDeselectAll = viewModel::onDeselectAll,
-            onConfirm = viewModel::onConfirmChapterSelection,
+            onConfirm = { withNotifPermission { viewModel.onConfirmChapterSelection() } },
             onDismiss = viewModel::onChapterDialogDismiss,
         )
     }
@@ -95,18 +121,7 @@ fun HomeScreen(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(56.dp))
-
-        // ── Header ──
-        Text(
-            "PDF下载器",
-            style = MaterialTheme.typography.headlineLarge,
-            color = scheme.onBackground,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp
-        )
-
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(36.dp))
 
         // ── Input card ──
         val isResolving = uiState.status is DownloadStatus.FetchingInfo
@@ -123,7 +138,7 @@ fun HomeScreen(
                     ambientColor = Color.Black.copy(alpha = 0.08f),
                 )
                 .clip(cardShape)
-                .background(scheme.surface.copy(alpha = 0.95f))
+                .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
                 .border(1.dp, scheme.outlineVariant.copy(alpha = 0.6f), cardShape)
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -179,6 +194,17 @@ fun HomeScreen(
 
         Spacer(Modifier.height(24.dp))
 
+        // ── Pending task (进程被杀后恢复) ──
+        val pendingTask = uiState.pendingTask
+        if (pendingTask != null && uiState.status is DownloadStatus.Idle) {
+            PendingTaskBanner(
+                task = pendingTask,
+                onResume = { withNotifPermission { viewModel.onResumePending() } },
+                onDiscard = viewModel::onDiscardPending,
+            )
+            Spacer(Modifier.height(24.dp))
+        }
+
         // ── Recent IDs (only before resolve) ──
         if (uiState.resolvedAlbum == null && uiState.recentIds.isNotEmpty()) {
             RecentIdsSection(
@@ -196,6 +222,7 @@ fun HomeScreen(
                 album = resolvedAlbum,
                 chapters = uiState.chapters,
                 onDownloadTapped = viewModel::onCardDownloadTapped,
+                onDismiss = viewModel::onAlbumCardDismiss,
             )
         }
 
@@ -225,7 +252,7 @@ fun HomeScreen(
                                 onDismiss = viewModel::dismissSuccess,
                             )
                         } else {
-                            SingleSuccessSection(uiState, onOpenPdf)
+                            SingleSuccessSection(uiState, onOpenPdf, viewModel::dismissSuccess)
                         }
                     }
 
@@ -246,7 +273,7 @@ private fun StatusCard(content: @Composable () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(scheme.surface.copy(alpha = 0.85f))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
             .border(1.dp, scheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -315,18 +342,34 @@ private fun DownloadingSection(message: String, fraction: Float?) {
 @Composable
 private fun SingleSuccessSection(
     uiState: HomeUiState,
-    onOpenPdf: (String) -> Unit
+    onOpenPdf: (String) -> Unit,
+    onDismiss: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val success = AppTheme.colors.success
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
-            .background(success.copy(alpha = 0.08f))
-            .border(1.dp, success.copy(alpha = 0.25f), RoundedCornerShape(24.dp))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
+            .border(1.dp, success.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // 右上角 × 关闭
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(56.dp).clip(CircleShape)
@@ -393,11 +436,26 @@ private fun MultiChapterSuccessSection(
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
-            .background(success.copy(alpha = 0.08f))
-            .border(1.dp, success.copy(alpha = 0.25f), RoundedCornerShape(24.dp))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
+            .border(1.dp, success.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
             .padding(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // 右上角 × 关闭
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
         Box(
             Modifier.size(48.dp).clip(CircleShape)
                 .background(success.copy(alpha = 0.18f)),
@@ -554,14 +612,73 @@ private fun RecentIdsSection(
     }
 }
 
+/** 上次下载未完成横幅：进程被杀后重启时展示，可继续（断点续传）或放弃。 */
+@Composable
+private fun PendingTaskBanner(
+    task: DownloadTask,
+    onResume: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
+            .border(1.dp, scheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
+            .padding(16.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.History,
+                contentDescription = null,
+                tint = scheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "上次下载未完成",
+                color = scheme.onBackground,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "《${task.title.ifBlank { task.albumId }}》 · 已选 ${task.selected.size} 章",
+            color = scheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row {
+            Button(
+                onClick = onResume,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp)
+            ) {
+                Text("继续下载", style = MaterialTheme.typography.labelLarge)
+            }
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onDiscard) {
+                Text(
+                    "放弃",
+                    color = scheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ErrorSection(message: String, onDismiss: () -> Unit) {
     val scheme = MaterialTheme.colorScheme
     Column(
         modifier = Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(scheme.error.copy(alpha = 0.08f))
-            .border(1.dp, scheme.error.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
+            .border(1.dp, scheme.error.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

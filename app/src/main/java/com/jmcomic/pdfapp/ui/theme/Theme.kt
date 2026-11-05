@@ -11,6 +11,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
@@ -30,6 +31,12 @@ private val LightExtended = ExtendedColors(SuccessGreenLight)
 private val DarkExtended = ExtendedColors(SuccessGreenDark)
 
 val LocalExtendedColors = staticCompositionLocalOf { LightExtended }
+
+/**
+ * 页面组件（卡片/底栏等）透明度，由设置页"组件透明度"滑块调节。
+ * 必须用 compositionLocalOf（非 static）：拖动滑块时全部消费者实时重组。
+ */
+val LocalComponentAlpha = compositionLocalOf { 0.95f }
 
 object AppTheme {
     val colors: ExtendedColors

@@ -27,6 +27,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,7 @@ import com.jmcomic.pdfapp.ui.screen.ComicsScreen
 import com.jmcomic.pdfapp.ui.screen.HomeScreen
 import com.jmcomic.pdfapp.ui.screen.SettingsScreen
 import com.jmcomic.pdfapp.ui.theme.JMComicPDFTheme
+import com.jmcomic.pdfapp.ui.theme.LocalComponentAlpha
 import com.jmcomic.pdfapp.viewmodel.HomeViewModel
 import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
 import java.io.File
@@ -74,21 +76,24 @@ class MainActivity : ComponentActivity() {
             JMComicPDFTheme(themeMode = themeMode) {
                 val homeViewModel: HomeViewModel = viewModel()
                 val settingsViewModel: SettingsViewModel = viewModel()
-                MainShell(
-                    homeViewModel = homeViewModel,
-                    settingsViewModel = settingsViewModel,
-                    backgroundPath = background.path,
-                    backgroundOpacity = background.opacity,
-                    onBackgroundChanged = { path, opacity ->
-                        background = BackgroundConfig(path, opacity)
-                        BackgroundPrefs.save(this, path, opacity)
-                    },
-                    onOpenPdf = { filePath -> openPdf(filePath) },
-                    onTabChanged = { tab ->
-                        // Refresh history when switching to comics tab
-                        if (tab == 1) settingsViewModel.refreshHistory()
-                    }
-                )
+                CompositionLocalProvider(
+                    LocalComponentAlpha provides background.componentAlpha
+                ) {
+                    MainShell(
+                        homeViewModel = homeViewModel,
+                        settingsViewModel = settingsViewModel,
+                        background = background,
+                        onBackgroundChanged = { config ->
+                            background = config
+                            BackgroundPrefs.save(this, config.path, config.opacity, config.componentAlpha)
+                        },
+                        onOpenPdf = { filePath -> openPdf(filePath) },
+                        onTabChanged = { tab ->
+                            // Refresh history when switching to comics tab
+                            if (tab == 1) settingsViewModel.refreshHistory()
+                        }
+                    )
+                }
             }
         }
         Log.d(TAG, "onCreate done")
@@ -139,13 +144,13 @@ private val TABS = listOf(
 private fun MainShell(
     homeViewModel: HomeViewModel,
     settingsViewModel: SettingsViewModel,
-    backgroundPath: String?,
-    backgroundOpacity: Float,
-    onBackgroundChanged: (String?, Float) -> Unit,
+    background: BackgroundConfig,
+    onBackgroundChanged: (BackgroundConfig) -> Unit,
     onOpenPdf: (String) -> Unit,
     onTabChanged: (Int) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
+    val componentAlpha = LocalComponentAlpha.current
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -153,10 +158,10 @@ private fun MainShell(
         Box(Modifier.fillMaxSize().background(scheme.background))
 
         // 全局背景图层（三页共用）
-        backgroundPath?.let { path ->
+        background.path?.let { path ->
             BackgroundLayer(
                 path = path,
-                opacity = backgroundOpacity,
+                opacity = background.opacity,
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -166,7 +171,7 @@ private fun MainShell(
             containerColor = Color.Transparent,
             bottomBar = {
                 NavigationBar(
-                    containerColor = scheme.surface.copy(alpha = 0.93f),
+                    containerColor = scheme.surface.copy(alpha = componentAlpha),
                     tonalElevation = 0.dp,
                 ) {
                     TABS.forEachIndexed { index, tab ->
@@ -204,8 +209,12 @@ private fun MainShell(
                 }
             }
         ) { innerPadding ->
+            // 顶部应用状态栏 inset（edge-to-edge 下内容不再顶到屏幕最上沿）
             Box(
-                modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
+                modifier = Modifier.padding(
+                    top = innerPadding.calculateTopPadding(),
+                    bottom = innerPadding.calculateBottomPadding(),
+                )
             ) {
                 Crossfade(
                     targetState = selectedTab,
@@ -222,8 +231,7 @@ private fun MainShell(
                             onOpenPdf = onOpenPdf,
                         )
                         2 -> SettingsScreen(
-                            backgroundPath = backgroundPath,
-                            backgroundOpacity = backgroundOpacity,
+                            background = background,
                             onBackgroundChanged = onBackgroundChanged,
                         )
                     }

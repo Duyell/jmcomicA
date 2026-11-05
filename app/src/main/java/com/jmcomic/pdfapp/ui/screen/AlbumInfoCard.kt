@@ -3,6 +3,7 @@ package com.jmcomic.pdfapp.ui.screen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,10 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +38,7 @@ import com.jmcomic.pdfapp.model.ChapterInfo
 import com.jmcomic.pdfapp.ui.components.CoverImage
 import com.jmcomic.pdfapp.ui.components.GradientButton
 import com.jmcomic.pdfapp.ui.theme.AppTheme
+import com.jmcomic.pdfapp.ui.theme.LocalComponentAlpha
 
 /**
  * 解析成功的漫画信息卡片（两步流程第二步）：大封面 + 标题 + 作者 + 标签 + 下载按钮。
@@ -44,12 +48,13 @@ fun AlbumInfoCard(
     album: AlbumInfo,
     chapters: List<ChapterInfo>,
     onDownloadTapped: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val success = AppTheme.colors.success
     val downloadedCount = chapters.count { it.downloaded }
     val singleChapter = chapters.size == 1
-    val singleAllDownloaded = singleChapter && downloadedCount == 1
+    val allDownloaded = chapters.isNotEmpty() && downloadedCount == chapters.size
 
     val cardShape = RoundedCornerShape(24.dp)
     Column(
@@ -61,20 +66,21 @@ fun AlbumInfoCard(
                 ambientColor = Color.Black.copy(alpha = 0.08f),
             )
             .clip(cardShape)
-            .background(scheme.surface.copy(alpha = 0.95f))
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
             .border(1.dp, scheme.outlineVariant.copy(alpha = 0.6f), cardShape)
             .padding(20.dp),
     ) {
-        // ── Cover + meta ──
-        Row {
-            CoverImage(
-                albumId = album.albumId,
-                title = album.title,
-                modifier = Modifier.size(width = 120.dp, height = 160.dp),
-                shape = RoundedCornerShape(12.dp),
-            )
-            Spacer(Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f)) {
+        // ── Cover + meta（右上角 × 关闭卡片，回到解析前）──
+        Box {
+            Row {
+                CoverImage(
+                    albumId = album.albumId,
+                    title = album.title,
+                    modifier = Modifier.size(width = 120.dp, height = 160.dp),
+                    shape = RoundedCornerShape(12.dp),
+                )
+                Spacer(Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f).padding(end = 24.dp)) {
                 Text(
                     text = album.title.ifBlank { "JM${album.albumId}" },
                     color = scheme.onSurface,
@@ -127,6 +133,20 @@ fun AlbumInfoCard(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
+            }
+
+            // × 关闭卡片
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).size(28.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = scheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
 
         // ── Tags ──
@@ -139,7 +159,7 @@ fun AlbumInfoCard(
 
         // ── Download CTA ──
         val buttonText = when {
-            singleAllDownloaded -> "已下载"
+            allDownloaded -> "已全部下载"
             singleChapter -> "下载 PDF"
             else -> "选择章节下载"
         }
@@ -147,7 +167,7 @@ fun AlbumInfoCard(
             text = buttonText,
             onClick = onDownloadTapped,
             modifier = Modifier.fillMaxWidth(),
-            enabled = !singleAllDownloaded,
+            enabled = !allDownloaded,
             leadingIcon = Icons.Rounded.Download,
         )
     }

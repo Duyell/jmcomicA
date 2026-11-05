@@ -352,6 +352,56 @@ def _discover_domains_with_proxy(proxy: str) -> list:
     return domain_list
 
 
+def _remove_incomplete_webp(download_base: str):
+    """
+    断点续传预清理：删除"没有同名 jpg 的 webp"。
+
+    jmcomic 的 download.cache 机制会跳过已存在的图片文件。上次下载
+    被进程杀死时可能留下两类残图：
+      - 已下载未解扰的 webp（无 jpg 对应）→ 删除，让本次重新下载并解扰；
+      - 已解扰完成的 jpg（webp 已删）→ jmcomic 会重新下载 webp，
+        本次解扰时覆盖 jpg，内容一致无影响。
+    同时清除 0 字节文件（下载中途被杀留下的半截文件）。
+    """
+    if not os.path.isdir(download_base):
+        return
+    for root, _dirs, files in os.walk(download_base):
+        for f in files:
+            path = os.path.join(root, f)
+            ext = os.path.splitext(f)[1].lower()
+            try:
+                if os.path.getsize(path) == 0 and ext in (
+                        '.jpg', '.jpeg', '.png', '.webp', '.bmp'):
+                    os.remove(path)
+                    continue
+                if ext == '.webp':
+                    base = os.path.splitext(path)[0]
+                    if not os.path.isfile(base + '.jpg'):
+                        os.remove(path)
+            except Exception:
+                pass
+
+
+def _dedupe_prefer_jpg(paths: list) -> list:
+    """
+    同名不同后缀（webp 与 jpg 并存）时只保留 jpg/png/bmp 等成品格式。
+    目录里同时存在 webp(源)与 jpg(解扰成品)时，避免 PDF 重复页。
+    """
+    by_base = {}
+    order = []
+    for p in paths:
+        base = os.path.splitext(p)[0]
+        if base not in by_base:
+            by_base[base] = p
+            order.append(base)
+        else:
+            old = by_base[base]
+            # 成品格式优先于 webp
+            if old.lower().endswith('.webp') and not p.lower().endswith('.webp'):
+                by_base[base] = p
+    return [by_base[b] for b in order]
+
+
 def _collect_images_from_photo(photo, download_base: str,
                                album_id: str = None,
                                photo_index: int = None) -> list:
@@ -399,7 +449,7 @@ def _collect_images_from_photo(photo, download_base: str,
                             for f in sorted(os.listdir(chapter_dir)):
                                 if os.path.splitext(f)[1].lower() in extensions:
                                     paths.append(os.path.join(chapter_dir, f))
-                            return paths
+                            return _dedupe_prefer_jpg(paths)
             # 2b: title empty or no match — use index (jmcomic dirs are
             #     created in chapter order matching album enumeration)
             if photo_index is not None and photo_index < len(subdirs):
@@ -408,7 +458,7 @@ def _collect_images_from_photo(photo, download_base: str,
                     for f in sorted(os.listdir(chapter_dir)):
                         if os.path.splitext(f)[1].lower() in extensions:
                             paths.append(os.path.join(chapter_dir, f))
-                    return paths
+                    return _dedupe_prefer_jpg(paths)
 
     # Strategy 3: last resort — walk entire download_base
     for root, dirs, files in os.walk(download_base):
@@ -416,7 +466,7 @@ def _collect_images_from_photo(photo, download_base: str,
         for f in sorted(files):
             if os.path.splitext(f)[1].lower() in extensions:
                 paths.append(os.path.join(root, f))
-    return paths
+    return _dedupe_prefer_jpg(paths)
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +732,7 @@ def _collect_images_from_album(album, download_base: str) -> list:
                 if os.path.splitext(f)[1].lower() in extensions:
                     all_paths.append(os.path.join(root, f))
 
-    return all_paths
+    return _dedupe_prefer_jpg(all_paths)
 
 
 def _decode_image_via_android(filepath: str):
@@ -1137,6 +1187,8 @@ def _download_album_images(album_id, output_dir, proxy_url):
         _unscramble_via_android(_image_meta, output_dir)
 
         download_base = os.path.join(output_dir, "downloads")
+        # 断点续传预清理（与选择性下载路径一致）
+        _remove_incomplete_webp(download_base)
         return album, download_base
     finally:
         try:
@@ -1223,6 +1275,10 @@ def _download_selected_photos(album_id, selected_set, output_dir, proxy_url):
                         if i in selected_set]
         total_to_dl = len(photos_to_dl)
         download_base = os.path.join(output_dir, "downloads")
+
+        # 断点续传预清理：删掉上次被杀留下的未解扰残图，
+        # 已完成的图片（有 jpg）会被 jmcomic cache 跳过，不重复走网络。
+        _remove_incomplete_webp(download_base)
 
         # ---- Download selected photos only ----
         if total_to_dl == 0:

@@ -5,8 +5,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,13 +27,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CollectionsBookmark
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,6 +65,7 @@ import com.jmcomic.pdfapp.model.ComicGroup
 import com.jmcomic.pdfapp.model.DownloadRecord
 import com.jmcomic.pdfapp.ui.components.CoverImage
 import com.jmcomic.pdfapp.ui.theme.AppTheme
+import com.jmcomic.pdfapp.ui.theme.LocalComponentAlpha
 import com.jmcomic.pdfapp.viewmodel.SettingsViewModel
 
 /**
@@ -78,7 +77,6 @@ fun ComicsScreen(
     onOpenPdf: (String) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val isSearchVisible by viewModel.isSearchVisible.collectAsStateWithLifecycle()
     val scheme = MaterialTheme.colorScheme
 
     // 待确认删除的漫画（先弹二次确认框）
@@ -87,61 +85,44 @@ fun ComicsScreen(
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
-        // ── Top bar ──
-        Row(
+        // ── Search bar（顶置，取代原"下载管理"标题）──
+        val focusManager = LocalFocusManager.current
+        OutlinedTextField(
+            value = uiState.searchQuery,
+            onValueChange = viewModel::onSearchQueryChanged,
+            placeholder = { Text("搜索漫画ID或标题...") },
+            singleLine = true,
             modifier = Modifier.fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 56.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "下载管理",
-                style = MaterialTheme.typography.headlineMedium,
-                color = scheme.onBackground,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = { viewModel.toggleSearch() }) {
-                Icon(
-                    if (isSearchVisible) Icons.Rounded.SearchOff
-                    else Icons.Rounded.Search,
-                    contentDescription = "搜索",
-                    tint = if (isSearchVisible) scheme.primary else scheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // ── Search bar ──
-        AnimatedVisibility(
-            visible = isSearchVisible,
-            enter = fadeIn() + slideInVertically(),
-            exit = fadeOut() + slideOutVertically()
-        ) {
-            val focusManager = LocalFocusManager.current
-            OutlinedTextField(
-                value = uiState.searchQuery,
-                onValueChange = viewModel::onSearchQueryChanged,
-                placeholder = { Text("搜索漫画ID或标题...") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                leadingIcon = {
-                    Icon(Icons.Rounded.Search, contentDescription = null,
-                        tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = scheme.onSurface,
-                    unfocusedTextColor = scheme.onSurface,
-                    cursorColor = scheme.primary,
-                    focusedBorderColor = scheme.primary,
-                    unfocusedBorderColor = scheme.outlineVariant,
-                    focusedContainerColor = scheme.surfaceContainerLow,
-                    unfocusedContainerColor = scheme.surfaceContainerLow,
+                .padding(start = 20.dp, end = 20.dp, top = 36.dp, bottom = 8.dp),
+            leadingIcon = {
+                Icon(Icons.Rounded.Search, contentDescription = null,
+                    tint = scheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            },
+            trailingIcon = {
+                if (uiState.searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                        Icon(Icons.Rounded.Close, contentDescription = "清空搜索",
+                            tint = scheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    }
+                }
+            },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = scheme.onSurface,
+                unfocusedTextColor = scheme.onSurface,
+                cursorColor = scheme.primary,
+                focusedBorderColor = scheme.primary,
+                unfocusedBorderColor = scheme.outlineVariant,
+                focusedContainerColor = scheme.surfaceContainerLow.copy(
+                    alpha = LocalComponentAlpha.current
                 ),
-                shape = RoundedCornerShape(12.dp)
-            )
-        }
+                unfocusedContainerColor = scheme.surfaceContainerLow.copy(
+                    alpha = LocalComponentAlpha.current
+                ),
+            ),
+            shape = RoundedCornerShape(12.dp)
+        )
 
         // ── Count ──
         val totalChapters = uiState.filteredGroups.sumOf { it.chapters.size }
@@ -250,7 +231,7 @@ private fun ComicGroupCard(
                 ambientColor = Color.Black.copy(alpha = 0.07f),
             )
             .clip(cardShape)
-            .background(scheme.surface)
+            .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
             .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
     ) {
         // ── Comic header (always visible) ──

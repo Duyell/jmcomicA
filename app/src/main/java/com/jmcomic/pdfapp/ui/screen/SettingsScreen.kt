@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Opacity
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Storage
@@ -47,6 +48,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jmcomic.pdfapp.data.BackgroundConfig
+import com.jmcomic.pdfapp.ui.theme.LocalComponentAlpha
 import com.jmcomic.pdfapp.viewmodel.formatBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -94,9 +97,8 @@ private fun computeStorageStats(filesDir: File): StorageStats {
  */
 @Composable
 fun SettingsScreen(
-    backgroundPath: String?,
-    backgroundOpacity: Float,
-    onBackgroundChanged: (path: String?, opacity: Float) -> Unit,
+    background: BackgroundConfig,
+    onBackgroundChanged: (BackgroundConfig) -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -135,7 +137,7 @@ fun SettingsScreen(
         if (uri != null) pendingCropUri = uri
     }
 
-    // 恢复默认背景：删文件 + 置空路径（透明度保留）
+    // 恢复默认背景：删文件 + 置空路径（透明度设置保留）
     fun resetBackground() {
         scope.launch {
             withContext(Dispatchers.IO) {
@@ -143,7 +145,7 @@ fun SettingsScreen(
                     File(context.filesDir, "backgrounds").listFiles()?.forEach { it.delete() }
                 }
             }
-            onBackgroundChanged(null, backgroundOpacity)
+            onBackgroundChanged(background.copy(path = null))
         }
     }
 
@@ -159,20 +161,7 @@ fun SettingsScreen(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // ── Top bar ──
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .padding(top = 56.dp, bottom = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "设置",
-                style = MaterialTheme.typography.headlineMedium,
-                color = scheme.onBackground,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.weight(1f)
-            )
-        }
+        Spacer(Modifier.height(36.dp))
 
         // ── 背景图片卡片 ──
         val cardShape = RoundedCornerShape(20.dp)
@@ -185,7 +174,7 @@ fun SettingsScreen(
                     ambientColor = Color.Black.copy(alpha = 0.07f),
                 )
                 .clip(cardShape)
-                .background(scheme.surface.copy(alpha = 0.95f))
+                .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
                 .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
                 .padding(vertical = 8.dp)
         ) {
@@ -215,7 +204,7 @@ fun SettingsScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        if (backgroundPath != null) "已设置" else "未设置",
+                        if (background.path != null) "已设置" else "未设置",
                         color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -234,7 +223,7 @@ fun SettingsScreen(
                     .background(scheme.outlineVariant.copy(alpha = 0.4f))
             )
 
-            // 透明度行
+            // 背景透明度行
             Column(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
@@ -254,16 +243,56 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f)
                     )
                     Text(
-                        "${(backgroundOpacity * 100).toInt()}%",
+                        "${(background.opacity * 100).toInt()}%",
                         color = scheme.primary,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Medium
                     )
                 }
                 Slider(
-                    value = backgroundOpacity,
-                    onValueChange = { onBackgroundChanged(backgroundPath, it) },
+                    value = background.opacity,
+                    onValueChange = { onBackgroundChanged(background.copy(opacity = it)) },
                     valueRange = 0.15f..1f,
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                )
+            }
+
+            // 分隔线
+            Spacer(
+                Modifier.fillMaxWidth().height(1.dp)
+                    .background(scheme.outlineVariant.copy(alpha = 0.4f))
+            )
+
+            // 组件透明度行
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.Layers,
+                        contentDescription = null,
+                        tint = scheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        "组件透明度",
+                        color = scheme.onSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${(background.componentAlpha * 100).toInt()}%",
+                        color = scheme.primary,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Slider(
+                    value = background.componentAlpha,
+                    onValueChange = { onBackgroundChanged(background.copy(componentAlpha = it)) },
+                    valueRange = 0.3f..1f,
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
                 )
             }
@@ -275,19 +304,19 @@ fun SettingsScreen(
             ) {
                 TextButton(
                     onClick = ::resetBackground,
-                    enabled = backgroundPath != null
+                    enabled = background.path != null
                 ) {
                     Icon(
                         Icons.Rounded.Restore,
                         contentDescription = null,
-                        tint = if (backgroundPath != null) scheme.onSurfaceVariant
+                        tint = if (background.path != null) scheme.onSurfaceVariant
                         else scheme.onSurfaceVariant.copy(alpha = 0.3f),
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "恢复默认背景",
-                        color = if (backgroundPath != null) scheme.onSurfaceVariant
+                        color = if (background.path != null) scheme.onSurfaceVariant
                         else scheme.onSurfaceVariant.copy(alpha = 0.3f),
                         style = MaterialTheme.typography.labelMedium
                     )
@@ -308,7 +337,7 @@ fun SettingsScreen(
                     ambientColor = Color.Black.copy(alpha = 0.07f),
                 )
                 .clip(cardShape)
-                .background(scheme.surface.copy(alpha = 0.95f))
+                .background(scheme.surface.copy(alpha = LocalComponentAlpha.current))
                 .border(1.dp, scheme.outlineVariant.copy(alpha = 0.55f), cardShape)
                 .padding(vertical = 8.dp)
         ) {
@@ -393,7 +422,7 @@ fun SettingsScreen(
             imageUri = uri,
             onConfirm = { path ->
                 pendingCropUri = null
-                onBackgroundChanged(path, backgroundOpacity)
+                onBackgroundChanged(background.copy(path = path))
             },
             onDismiss = { pendingCropUri = null },
         )

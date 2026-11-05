@@ -165,11 +165,19 @@ class DownloadHistoryManager(private val filesDir: File) {
     /**
      * Extract 0-based chapter index from filename like
      * "[JM1081229] 002_xxx.pdf" → 1  (002 is 1-based, API uses 0-based)
+     *
+     * v1.4.1:兼容 v1.1/v1.2 老格式 "[JM{id}] {标题}.pdf"(无 "NNN_" 前缀,
+     * 整本合并的单 PDF)——视为第 0 章,否则老文件永远识别为"未下载"。
      */
     private fun extractChapterIndex(filename: String): Int? {
         val match = Regex("""\[JM\d+\]\s*(\d+)_.*\.pdf""").find(filename)
-        val oneBased = match?.groupValues?.get(1)?.toIntOrNull() ?: return null
-        return (oneBased - 1).coerceAtLeast(0)
+        if (match != null) {
+            val oneBased = match.groupValues[1].toIntOrNull() ?: return null
+            return (oneBased - 1).coerceAtLeast(0)
+        }
+        // Legacy merged format [JM{id}] {title}.pdf → chapter 0
+        if (Regex("""\[JM\d+\]""").containsMatchIn(filename)) return 0
+        return null
     }
 
     /** Scan filesystem (used when history JSON is empty/missing). */

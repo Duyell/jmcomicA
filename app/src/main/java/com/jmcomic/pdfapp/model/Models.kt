@@ -102,7 +102,35 @@ data class HomeUiState(
     val pdfPath: String? = null,
     val errorMessage: String? = null,
     val progressMessage: String = "",
-    val progressFraction: Float? = null   // null = indeterminate
+    val progressFraction: Float? = null,   // null = indeterminate
+    // 未完成的下载任务（进程被杀后恢复用），null = 无
+    val pendingTask: DownloadTask? = null,
+)
+
+/**
+ * 下载任务快照：落盘到 download_task.json，进程被杀后据此恢复。
+ */
+data class DownloadTask(
+    val albumId: String,
+    val title: String,
+    val author: String,
+    val tags: List<String>,
+    val pageCount: Int,
+    val chapters: List<ChapterInfo>,   // 全章节快照（恢复信息卡片用）
+    val selected: List<Int>,           // 本次要下载的章节 index
+)
+
+/**
+ * DownloadManager 持有的下载状态（跨进程存活，UI 订阅镜像）。
+ */
+data class DownloadUiState(
+    val activeTask: DownloadTask? = null,
+    val status: DownloadStatus = DownloadStatus.Idle,
+    val progressMessage: String = "",
+    val progressFraction: Float? = null,
+    val chapterResults: List<ChapterDownloadResult> = emptyList(),
+    val pdfPath: String? = null,
+    val errorMessage: String? = null,
 )
 
 /**

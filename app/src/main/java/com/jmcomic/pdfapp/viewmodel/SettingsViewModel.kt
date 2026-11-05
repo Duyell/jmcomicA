@@ -26,9 +26,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
-    private val _isSearchVisible = MutableStateFlow(false)
-    val isSearchVisible: StateFlow<Boolean> = _isSearchVisible.asStateFlow()
-
     init { refreshHistory() }
 
     fun refreshHistory() {
@@ -56,12 +53,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             }
             _uiState.value = _uiState.value.copy(filteredGroups = filtered)
         }
-    }
-
-    fun toggleSearch() {
-        val newState = !_isSearchVisible.value
-        _isSearchVisible.value = newState
-        if (!newState) onSearchQueryChanged("")
     }
 
     fun toggleGroup(albumId: String) {
